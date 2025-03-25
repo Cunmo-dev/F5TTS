@@ -16,7 +16,7 @@ import os
 from huggingface_hub import login
 
 # Lấy token từ secrets
-hf_token = os.getenv("f5-tts")
+hf_token = os.getenv("HUGGINGFACEHUB_API_TOKEN")
 
 # Login vào Hugging Face
 if hf_token:
