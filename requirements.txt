@@ -1,5 +1,5 @@
-f5-tts
-vinorm
 --extra-index-url https://download.pytorch.org/whl/cu124
 torch==2.4.0+cu124
 torchaudio==2.4.0+cu124
+f5-tts
+vinorm
