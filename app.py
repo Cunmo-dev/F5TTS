@@ -15,6 +15,8 @@ from f5_tts.infer.utils_infer import (
 import os
 from huggingface_hub import login
 
+os.system("pip install torch==2.4.0+cu124 torchaudio==2.4.0+cu124 --extra-index-url https://download.pytorch.org/whl/cu124")
+
 # Lấy token từ secrets
 hf_token = os.getenv("HUGGINGFACEHUB_API_TOKEN")
 
