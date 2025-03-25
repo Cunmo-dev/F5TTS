@@ -1,7 +1,7 @@
 import spaces
 import os
 from huggingface_hub import login
-os.system("pip install torch==2.4.0+cu124 torchaudio==2.4.0+cu124 --extra-index-url https://download.pytorch.org/whl/cu124")
+# os.system("pip install torch==2.4.0+cu124 torchaudio==2.4.0+cu124 --extra-index-url https://download.pytorch.org/whl/cu124")
 import gradio as gr
 from cached_path import cached_path
 import tempfile
