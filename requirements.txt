@@ -1,2 +1,7 @@
-f5-tts
+torch
+torchaudio
+soundfile
+transformers
+f5_tts @ git+https://github.com/SWivid/F5-TTS.git
+bitsandbytes>0.37.0
 vinorm
