@@ -7,9 +7,7 @@ vinorm
 cached_path
 huggingface_hub
 gradio
-torchdiffeq
 accelerate>=0.33.0
-cached_path
 click
 datasets
 ema_pytorch>=0.5.2
@@ -24,11 +22,8 @@ pypinyin
 safetensors
 soundfile
 tomli
-torch>=2.0.0
-torchaudio>=2.0.0
 torchdiffeq
 tqdm>=4.65.0
-transformers
 transformers_stream_generator
 vocos
 wandb
