@@ -1,5 +1,5 @@
 ---
-title: F5 TTS Vietnamese 100h
+title: F5 TTS Vietnamese 100h Demo
 emoji: 🏢
 colorFrom: yellow
 colorTo: purple
