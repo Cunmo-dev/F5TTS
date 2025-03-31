@@ -15,10 +15,10 @@ from f5_tts.infer.utils_infer import (
     save_spectrogram,
 )
 
-# Lấy token từ secrets
+# Retrieve token from secrets
 hf_token = os.getenv("HUGGINGFACEHUB_API_TOKEN")
 
-# Login vào Hugging Face
+# Log in to Hugging Face
 if hf_token:
     login(token=hf_token)
 
@@ -31,6 +31,8 @@ def post_process(text):
     text = text.replace(" , , ", " , ")
     text = " " + text + " "
     text = text.replace(" ,, ", " , ")
+    text = " " + text + " "
+    text = text.replace('"', "")
     return " ".join(text.split())
 
 # Load models
@@ -38,7 +40,7 @@ vocoder = load_vocoder()
 model = load_model(
     DiT,
     dict(dim=1024, depth=22, heads=16, ff_mult=2, text_dim=512, conv_layers=4),
-    ckpt_path=str(cached_path("hf://hynt/F5-TTS-Vietnamese-100h/model_390000.pt")),
+    ckpt_path=str(cached_path("hf://hynt/F5-TTS-Vietnamese-100h/model_470000.pt")),
     vocab_file=str(cached_path("hf://hynt/F5-TTS-Vietnamese-100h/vocab.txt")),
 )
 
@@ -46,11 +48,11 @@ model = load_model(
 def infer_tts(ref_audio_orig: str, gen_text: str, speed: float = 1.0, request: gr.Request = None):
 
     if not ref_audio_orig:
-        raise gr.Error("Vui lòng tải lên tệp âm thanh mẫu.")
+        raise gr.Error("Please upload a sample audio file.")
     if not gen_text.strip():
-        raise gr.Error("Vui lòng nhập nội dung cần sinh giọng.")
+        raise gr.Error("Please enter the text content to generate voice.")
     if len(gen_text.split()) > 1000:
-        raise gr.Error("Vui lòng nhập nội dung cần sinh giọng nhỏ hơn 100 từ.")
+        raise gr.Error("Please enter text content with less than 100 words.")
     
     try:
         ref_audio, ref_text = preprocess_ref_audio_text(ref_audio_orig, "")
@@ -63,38 +65,39 @@ def infer_tts(ref_audio_orig: str, gen_text: str, speed: float = 1.0, request: g
 
         return (final_sample_rate, final_wave), spectrogram_path
     except Exception as e:
-        raise gr.Error(f"Lỗi khi sinh giọng: {e}")
+        raise gr.Error(f"Error generating voice: {e}")
 
 # Gradio UI
 with gr.Blocks(theme=gr.themes.Soft()) as demo:
     gr.Markdown("""
-    # 🎤 F5-TTS: Tổng hợp giọng nói Tiếng Việt.
-    # Mô hình được huấn luyện 390.000 steps với bộ dữ liệu khoảng 150h trên 1 GPU RTX 3090. 
-    Nhập văn bản và tải lên một mẫu giọng để tạo âm thanh tự nhiên.
+    # 🎤 F5-TTS: Vietnamese Text-to-Speech Synthesis.
+    # The model was trained for 470,000 steps with approximately 150 hours of data on an RTX 3090 GPU. 
+    Enter text and upload a sample voice to generate natural speech.
     """)
     
     with gr.Row():
-        ref_audio = gr.Audio(label="🔊 Mẫu giọng", type="filepath")
-        gen_text = gr.Textbox(label="📝 Văn bản", placeholder="Nhập nội dung cần sinh giọng...", lines=3)
+        ref_audio = gr.Audio(label="🔊 Sample Voice", type="filepath")
+        gen_text = gr.Textbox(label="📝 Text", placeholder="Enter the text to generate voice...", lines=3)
     
-    speed = gr.Slider(0.3, 2.0, value=1.0, step=0.1, label="⚡ Tốc độ")
-    btn_synthesize = gr.Button("🔥 Sinh giọng")
+    speed = gr.Slider(0.3, 2.0, value=1.0, step=0.1, label="⚡ Speed")
+    btn_synthesize = gr.Button("🔥 Generate Voice")
     
     with gr.Row():
-        output_audio = gr.Audio(label="🎧 Âm thanh tạo ra", type="numpy")
+        output_audio = gr.Audio(label="🎧 Generated Audio", type="numpy")
         output_spectrogram = gr.Image(label="📊 Spectrogram")
     
     model_limitations = gr.Textbox(
-        value="""1. Mô hình có thể hoạt động không tốt với các ký tự số, ngày tháng, ký tự đặc biệt, ... => Cần bổ sung thêm một module text normalization (chuẩn hoá text).
-2. Nhịp điệu của một số audio có thể chưa được mạch lạc, giật cục => Gợi ý hãy chọn các audio mẫu đọc rõ ràng, không ngắt quãng quá nhiều, sẽ cải thiện được kết quả tổng hợp.
-3. Audio reference text sử dụng model whisper-large-v3-turbo nên sẽ có một vài trường hợp không nhận diện chính xác Tiếng Việt, dẫn đến kết quả tổng hợp giọng nói rất tệ.
-4. Checkpoint của mô hình hiện tại dừng lại ở khoảng step thứ 390.000, được huấn luyện với 150 giờ dữ liệu public => Việc voice cloning cho các giọng ngoại lai có thể không được chính xác tuyệt đối.""", 
-        label="❗ Hạn chế của mô hình",
-        lines=4,
+        value="""1. The model may not perform well with numerical characters, dates, special characters, etc. => A text normalization module is needed.
+2. The rhythm of some generated audios may be inconsistent or choppy => It is recommended to select clearly pronounced sample audios with minimal pauses for better synthesis quality.
+3. The reference audio text uses the whisper-large-v3-turbo model, which may not always accurately recognize Vietnamese, resulting in poor voice synthesis quality.
+4. The current model checkpoint is at around step 470,000, trained with 150 hours of public data => Voice cloning for non-native voices may not be perfectly accurate.
+5. Inference with overly long paragraphs may produce poor results.""", 
+        label="❗ Model Limitations",
+        lines=5,
         interactive=False
     )
 
     btn_synthesize.click(infer_tts, inputs=[ref_audio, gen_text, speed], outputs=[output_audio, output_spectrogram])
 
-# Chạy Gradio với share=True để có link gradio.live
+# Run Gradio with share=True to get a gradio.live link
 demo.queue().launch()
