@@ -71,7 +71,7 @@ def infer_tts(ref_audio_orig: str, gen_text: str, speed: float = 1.0, request: g
 with gr.Blocks(theme=gr.themes.Soft()) as demo:
     gr.Markdown("""
     # 🎤 F5-TTS: Vietnamese Text-to-Speech Synthesis.
-    # The model was trained for 470,000 steps with approximately 150 hours of data on an RTX 3090 GPU. 
+    # The model was trained for 480,000 steps with approximately 150 hours of data on an RTX 3090 GPU. 
     Enter text and upload a sample voice to generate natural speech.
     """)
     
@@ -90,7 +90,7 @@ with gr.Blocks(theme=gr.themes.Soft()) as demo:
         value="""1. The model may not perform well with numerical characters, dates, special characters, etc. => A text normalization module is needed.
 2. The rhythm of some generated audios may be inconsistent or choppy => It is recommended to select clearly pronounced sample audios with minimal pauses for better synthesis quality.
 3. The reference audio text uses the whisper-large-v3-turbo model, which may not always accurately recognize Vietnamese, resulting in poor voice synthesis quality.
-4. The current model checkpoint is at around step 470,000, trained with 150 hours of public data => Voice cloning for non-native voices may not be perfectly accurate.
+4. The current model checkpoint is at around step 480,000, trained with 150 hours of public data => Voice cloning for non-native voices may not be perfectly accurate.
 5. Inference with overly long paragraphs may produce poor results.""", 
         label="❗ Model Limitations",
         lines=5,
