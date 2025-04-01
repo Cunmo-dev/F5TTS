@@ -40,7 +40,7 @@ vocoder = load_vocoder()
 model = load_model(
     DiT,
     dict(dim=1024, depth=22, heads=16, ff_mult=2, text_dim=512, conv_layers=4),
-    ckpt_path=str(cached_path("hf://hynt/F5-TTS-Vietnamese-100h/model_470000.pt")),
+    ckpt_path=str(cached_path("hf://hynt/F5-TTS-Vietnamese-100h/model_480000.pt")),
     vocab_file=str(cached_path("hf://hynt/F5-TTS-Vietnamese-100h/vocab.txt")),
 )
 
