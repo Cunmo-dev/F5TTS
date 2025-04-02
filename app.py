@@ -52,7 +52,7 @@ def infer_tts(ref_audio_orig: str, gen_text: str, speed: float = 1.0, request: g
     if not gen_text.strip():
         raise gr.Error("Please enter the text content to generate voice.")
     if len(gen_text.split()) > 1000:
-        raise gr.Error("Please enter text content with less than 100 words.")
+        raise gr.Error("Please enter text content with less than 1000 words.")
     
     try:
         ref_audio, ref_text = preprocess_ref_audio_text(ref_audio_orig, "")
