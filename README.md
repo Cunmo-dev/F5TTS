@@ -1,12 +1,13 @@
----
-title: F5 TTS Vietnamese 100h Demo
-emoji: 💻
-colorFrom: yellow
-colorTo: blue
-sdk: gradio
-sdk_version: 5.36.2
-app_file: app.py
-pinned: false
----
+git clone https://huggingface.co/spaces/hynt/F5-TTS-Vietnamese-100h
+cd F5-TTS-Vietnamese-100h
+# Tạo môi trường ảo
+python -m venv env
 
-Check out the configuration reference at https://huggingface.co/docs/hub/spaces-config-reference
+# Kích hoạt môi trường ảo trên PowerShell
+.\env\Scripts\Activate.ps1
+
+# 3. Cài đặt dependencies
+pip install -r requirements.txt
+
+# 4. Chạy ứng dụng
+python app.py

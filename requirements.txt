@@ -1,5 +1,5 @@
-torch
-torchaudio
+torch >2
+torchaudio>2
 soundfile
 transformers
 bitsandbytes>0.37.0
