@@ -1,0 +1,126 @@
+# BƯỚC 1: setup môi trường
+!sudo apt-get update -qq
+!sudo apt-get install -y python3.10 python3.10-venv python3.10-dev
+
+# BƯỚC 3: Clone repository
+# ==============================
+print("\n📦 Clone repository...")
+
+!git clone https://github.com/Cunmo-dev/F5TTS.git
+%cd F5TTS
+
+
+# ==============================
+# BƯỚC 4: Tạo virtual environment với Python 3.10
+# ==============================
+print("\n🔧 Tạo virtual environment với Python 3.10...")
+
+!python3.10 -m venv env
+
+print("✅ Đã tạo venv!")
+
+# BƯỚC 5: Cài đặt dependencies (PyTorch với CUDA trước)
+# ==============================
+print("\n📦 Cài đặt PyTorch với CUDA...")
+
+# Cài PyTorch với CUDA 12.1 (cho GPU)
+!./env/bin/pip install torch torchaudio --index-url https://download.pytorch.org/whl/cu121
+
+print("\n📦 Cài đặt các thư viện còn lại...")
+
+# Cài các thư viện khác từ requirements.txt (bỏ qua torch, torchaudio)
+!./env/bin/pip install soundfile transformers "bitsandbytes>0.37.0" vinorm cached_path huggingface_hub gradio "accelerate>=0.33.0" click datasets "ema_pytorch>=0.5.2" "hydra-core>=1.3.0" jieba librosa matplotlib "numpy<=1.26.4" pydub pypinyin safetensors tomli torchdiffeq "tqdm>=4.65.0" transformers_stream_generator vocos wandb "x_transformers>=1.31.14"
+
+print("✅ Hoàn tất cài đặt!")
+
+!./env/bin/pip install spaces
+
+# BƯỚC 7: Tạo script inference
+# ==============================
+print("\n📝 Tạo script inference...")
+
+inference_code = '''
+import sys
+import torch
+import torchaudio
+from cached_path import cached_path
+from f5_tts.infer.utils_infer import infer_process, load_vocoder, load_model
+from f5_tts.model import DiT
+
+def synthesize(ref_audio, ref_text, gen_text):
+    print("Loading model...")
+    
+    # Config
+    model_path = "hynt/F5-TTS-Vietnamese-100h"
+    vocab_file = cached_path(f"hf://{model_path}/vocab.txt")
+    ckpt_file = cached_path(f"hf://{model_path}/model_500000.pt")
+    
+    # Load vocab
+    with open(vocab_file, "r", encoding="utf-8") as f:
+        vocab_list = [line.strip() for line in f]
+    vocab_char_map = {char: i for i, char in enumerate(vocab_list)}
+    vocab_size = len(vocab_char_map)
+    
+    # Model config
+    model_cfg = dict(dim=1024, depth=22, heads=16, ff_mult=2, text_dim=512, conv_layers=4)
+    
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    model = DiT(**model_cfg, text_num_embeds=vocab_size, mel_dim=100)
+    
+    # Load checkpoint
+    ckpt = torch.load(ckpt_file, map_location=device, weights_only=True)
+    model.load_state_dict(ckpt["model_state_dict"])
+    model = model.to(device)
+    model.eval()
+    
+    # Load vocoder
+    vocoder = load_vocoder(vocoder_name="vocos")
+    
+    print("Synthesizing...")
+    
+    # Normalize
+    ref_text = ref_text.lower().strip()
+    gen_text = gen_text.lower().strip()
+    
+    # Inference
+    audio, sr, _ = infer_process(
+        ref_audio, ref_text, gen_text,
+        model, vocoder,
+        mel_spec_type="vocos",
+        speed=1.0,
+        device=device
+    )
+    
+    # Save
+    output = "output.wav"
+    torchaudio.save(output, audio, sr)
+    print(f"Saved: {output}")
+    return output
+
+if __name__ == "__main__":
+    synthesize(sys.argv[1], sys.argv[2], sys.argv[3])
+'''
+
+with open("inference.py", "w") as f:
+    f.write(inference_code)
+
+print("✅ Đã tạo inference.py!")
+
+# Thêm code vào đầu app.py
+!sed -i '1i import os\nos.environ["MPLBACKEND"] = "Agg"\n' app.py
+
+# Downgrade transformers để bỏ qua check PyTorch 2.6
+!./env/bin/pip install "transformers==4.44.2"
+
+# Kill app
+!pkill -f app.py
+# Sau đó sửa đúng cách - Bỏ hẳn cả block if
+!sed -i '/if len(gen_text.split())/,/raise gr.Error.*1000 words/d' app.py
+# Tìm và sửa dòng .launch() trong app.py
+!sed -i 's/\.launch()/\.launch(share=True)/g' app.py
+# Kiểm tra
+!sed -n '55,65p' app.py
+# Chạy lại app
+!pkill -f app.py  # Kill process cũ nếu có
+!MPLBACKEND=Agg ./env/bin/python app.py
+
