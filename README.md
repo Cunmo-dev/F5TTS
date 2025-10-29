@@ -1,6 +1,6 @@
 git clone https://github.com/Cunmo-dev/F5TTS.git
 # ĐẾN THƯ MỤC
-cd F5-TTS-Vietnamese-100h
+cd F5TTS
 # Tạo môi trường ảo
 python -m venv env
 
