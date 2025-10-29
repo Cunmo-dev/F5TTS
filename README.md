@@ -1,4 +1,4 @@
-git clone https://huggingface.co/spaces/hynt/F5-TTS-Vietnamese-100h
+git clone https://github.com/Cunmo-dev/F5TTS.git
 # ĐẾN THƯ MỤC
 cd F5-TTS-Vietnamese-100h
 # Tạo môi trường ảo
