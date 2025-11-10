@@ -50,78 +50,27 @@ def split_text_into_sentences(text, pause_paragraph_duration=0.8, pause_dialogue
         # Loại bỏ dấu ngoặc kép để xử lý
         clean_text = line.replace('"', '').replace('"', '').replace('"', '').strip()
         
-        # Chuẩn hóa dấu chấm liên tiếp (... -> .)
-        clean_text = re.sub(r'\.{2,}', '.', clean_text)
-        clean_text = re.sub(r'[.!?]{2,}', '.', clean_text)
-        
         # Tách thành các câu dựa trên dấu câu
-        sentences = re.split(r'([.!?])', clean_text)
+        sentences = re.split(r'([.!?]+)', clean_text)
         
         current_sentence = ""
         for i, part in enumerate(sentences):
-            part = part.strip()
-            if not part:
-                continue
-                
             if i % 2 == 0:  # Phần văn bản
                 current_sentence += part
             else:  # Dấu câu
                 current_sentence += part
                 sentence_text = current_sentence.strip()
                 
-                # Chỉ thêm nếu câu có ít nhất 1 từ
-                if sentence_text and len(sentence_text.split()) >= 1:
+                # Chỉ thêm nếu câu không rỗng
+                if sentence_text:
                     chunks.append((sentence_text, pause_duration))
                     current_sentence = ""
         
-        # Thêm phần còn lại nếu có (không có dấu câu kết thúc)
-        if current_sentence.strip() and len(current_sentence.strip().split()) >= 1:
+        # Thêm phần còn lại nếu có
+        if current_sentence.strip():
             chunks.append((current_sentence.strip(), pause_duration))
     
-    # Gộp câu CHỈ với câu tường thuật ngắn, GIỮ NGUYÊN hội thoại
-    merged_chunks = []
-    temp_sentence = ""
-    temp_pause = pause_paragraph_duration
-    
-    for i, (sentence, pause) in enumerate(chunks):
-        word_count = len(sentence.split())
-        is_last = (i == len(chunks) - 1)
-        is_dialogue = (pause == pause_dialogue_duration)
-        
-        # HỘI THOẠI: Giữ nguyên bất kể độ dài
-        if is_dialogue:
-            if temp_sentence:
-                # Xuất câu tường thuật tích lũy trước
-                merged_chunks.append((temp_sentence, temp_pause))
-                temp_sentence = ""
-            merged_chunks.append((sentence, pause))
-        
-        # TƯỜNG THUẬT: Gộp nếu quá ngắn (< 3 từ)
-        else:
-            if word_count >= 3:
-                if temp_sentence:
-                    merged_chunks.append((temp_sentence + " " + sentence, pause))
-                    temp_sentence = ""
-                else:
-                    merged_chunks.append((sentence, pause))
-            else:
-                # Câu ngắn, tích lũy
-                if temp_sentence:
-                    temp_sentence += " " + sentence
-                else:
-                    temp_sentence = sentence
-                    temp_pause = pause
-                
-                # Xuất nếu câu cuối
-                if is_last:
-                    merged_chunks.append((temp_sentence, temp_pause))
-                    temp_sentence = ""
-    
-    # Thêm phần cuối nếu còn sót
-    if temp_sentence:
-        merged_chunks.append((temp_sentence, temp_pause))
-    
-    return merged_chunks
+    return chunks
 
 def create_silence(duration_seconds, sample_rate=24000):
     """Tạo đoạn im lặng với thời gian xác định."""
@@ -131,8 +80,6 @@ def create_silence(duration_seconds, sample_rate=24000):
 def post_process(text):
     """Làm sạch văn bản."""
     text = " " + text + " "
-    # Chuẩn hóa dấu chấm liên tiếp
-    text = re.sub(r'\.{2,}', '.', text)
     text = text.replace(" . . ", " . ")
     text = text.replace(" .. ", " . ")
     text = text.replace('"', "")
@@ -140,9 +87,7 @@ def post_process(text):
     text = text.replace('"', "")
     # Loại bỏ dấu phẩy dư thừa
     text = re.sub(r',+', ',', text)
-    # Loại bỏ khoảng trắng dư thừa
-    text = " ".join(text.split())
-    return text
+    return " ".join(text.split())
 
 # Load models
 vocoder = load_vocoder()
@@ -167,9 +112,9 @@ def infer_tts(ref_audio_orig: str, gen_text: str, speed: float = 1.0,
     try:
         # Cấu hình pause (giây)
         pause_configs = {
-            "Short": (0.4, 0.2),    # Paragraph: 0.4s, Dialogue: 0.2s
-            "Medium": (0.8, 0.4),   # Paragraph: 0.8s, Dialogue: 0.4s
-            "Long": (1.2, 0.6)      # Paragraph: 1.2s, Dialogue: 0.6s
+            "Short": (0.2, 0.1),    # Paragraph: 0.4s, Dialogue: 0.2s
+            "Medium": (0.4, 0.2),   # Paragraph: 0.8s, Dialogue: 0.4s
+            "Long": (0.6, 0.3)      # Paragraph: 1.2s, Dialogue: 0.6s
         }
         
         pause_paragraph, pause_dialogue = pause_configs.get(pause_level, (0.8, 0.4))
@@ -200,7 +145,7 @@ def infer_tts(ref_audio_orig: str, gen_text: str, speed: float = 1.0,
             normalized_text = post_process(TTSnorm(sentence)).lower()
             
             # Kiểm tra độ dài
-            if len(normalized_text.strip()) < 5:
+            if len(normalized_text.strip()) < 2:
                 print(f"   ⏭️ Skipped (too short after normalize): '{normalized_text}'")
                 continue
             
@@ -318,8 +263,6 @@ Hắn liền lột vỏ một trái rồi cắn xuống.""",
     |---------|-------------|
     | **Line-by-Line Processing** | Each line is processed separately |
     | **Dialogue Detection** | Automatically detects quoted speech with `"..."` |
-    | **Dialogue Preservation** | ALL dialogue lines kept intact (even 1 word like "Vậy...") |
-    | **Narrative Merging** | Only short narrative sentences (< 3 words) are merged |
     | **Real Silence** | Actual silent gaps (no fake sounds!) |
     | **Three Levels** | Short (0.4s/0.2s), Medium (0.8s/0.4s), Long (1.2s/0.6s) |
     
@@ -346,7 +289,7 @@ Hắn liền lột vỏ một trái rồi cắn xuống.""",
     - Each sentence is processed separately, then combined with real silence
     - Longer texts take more time but produce better pause quality
     - Dialogue lines are automatically detected by quotes
-    - Very short sentences (< 3 words) are merged with nearby sentences
+    - All sentences are processed individually without merging
     """)
     
     with gr.Accordion("❗ Model Limitations", open=False):
@@ -356,7 +299,6 @@ Hắn liền lột vỏ một trái rồi cắn xuống.""",
         3. **Reference Text**: Auto-transcribed with Whisper (may have errors)
         4. **Processing Time**: Increases with text length (sentence-by-sentence processing)
         5. **Foreign Words**: May not pronounce non-Vietnamese words correctly
-        6. **Narrative Merging**: Only short narrative sentences (< 3 words) are merged. All dialogue preserved.
         """)
 
     # Connect button to function
