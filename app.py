@@ -1,5 +1,6 @@
 import os
 os.environ["MPLBACKEND"] = "Agg"
+
 import spaces
 from huggingface_hub import login
 import gradio as gr
@@ -7,7 +8,7 @@ from cached_path import cached_path
 import tempfile
 from vinorm import TTSnorm
 import re
-import numpy as np
+
 from f5_tts.model import DiT
 from f5_tts.infer.utils_infer import (
     preprocess_ref_audio_text,
@@ -17,126 +18,72 @@ from f5_tts.infer.utils_infer import (
     save_spectrogram,
 )
 
-# Login HF
+# Retrieve token from secrets
 hf_token = os.getenv("HUGGINGFACEHUB_API_TOKEN")
+
+# Log in to Hugging Face
 if hf_token:
     login(token=hf_token)
 
-# ==================== PAUSE MARKER SYSTEM ====================
-PAUSE_MARKER = "|||"
-
-def add_pause_markers(text, pause_level="Medium"):
+def add_natural_pauses(text, pause_level="Medium"):
     """
-    Thay thế dấu câu bằng marker (NGẮN HƠN để không chậm)
+    Thêm ký hiệu đặc biệt để tạo khoảng dừng tự nhiên.
+    Sử dụng dấu chấm lặp (...) thay vì dấu phẩy để tránh âm lạ.
     """
+    # Cấu hình pause bằng dấu chấm lặp
     pause_configs = {
-        "Short":   ("|", ""),        # Paragraph: 0.15s, Dialogue: 0s
-        "Medium":  ("||", "|"),      # Paragraph: 0.3s, Dialogue: 0.15s
-        "Long":    ("|||", "||")     # Paragraph: 0.5s, Dialogue: 0.3s
+        "Short": (".....", "...."),         # Paragraph: 3 dots, Dialogue: 2 dots
+        "Medium": (".......", "....."),     # Paragraph: 5 dots, Dialogue: 3 dots
+        "Long": (".........", "......."),   # Paragraph: 7 dots, Dialogue: 5 dots
     }
-    para_marker, dia_marker = pause_configs.get(pause_level, ("||", "|"))
-
+    
+    pause_paragraph, pause_dialogue = pause_configs.get(pause_level, (".....", "..."))
+    
+    print(f"\n🎛️ Pause markers: Paragraph='{pause_paragraph}', Dialogue='{pause_dialogue}'")
+    
+    # Tách theo dòng trống để phân biệt đoạn văn
     paragraphs = text.split('\n\n')
-    processed = []
-
+    processed_paragraphs = []
+    
     for para in paragraphs:
         para = para.strip()
-        if not para: continue
-
+        if not para:
+            continue
+        
+        # Gộp các dòng trong cùng đoạn
         lines = para.split('\n')
-        combined = ' '.join(line.strip() for line in lines if line.strip())
-        has_quotes = '"' in combined or '"' in combined or '"' in combined
-        marker = dia_marker if has_quotes else para_marker
-
-        # Thay .!? bằng marker NGẮN
-        combined = re.sub(r'([.!?])\s*', rf'\1 {marker} ', combined)
-        processed.append(combined)
-
-    result = '\n\n'.join(processed)
-    print(f"Pause markers added: {result[:200]}...")
+        combined_text = ' '.join(line.strip() for line in lines if line.strip())
+        
+        # Kiểm tra hội thoại (có dấu ngoặc)
+        has_quotes = '"' in combined_text or '"' in combined_text or '"' in combined_text
+        is_dialogue = has_quotes
+        
+        pause_marker = pause_dialogue if is_dialogue else pause_paragraph
+        
+        # Thay thế dấu câu cuối bằng dấu câu + pause marker
+        # Ví dụ: "Xin chào." -> "Xin chào. ....."
+        combined_text = re.sub(r'([.!?])(\s|$)', r'\1 ' + pause_marker + r'\2', combined_text)
+        
+        processed_paragraphs.append(combined_text)
+    
+    result = '\n\n'.join(processed_paragraphs)
+    
+    print(f"\n📝 Processed text preview:")
+    print(result[:300] + "..." if len(result) > 300 else result)
+    
     return result
 
-def post_process_text(text):
-    """Chỉ làm sạch, KHÔNG xóa marker"""
+def post_process(text):
+    """Làm sạch văn bản - GIỮ LẠI dấu chấm lặp để tạo pause."""
     text = " " + text + " "
-    text = text.replace('"', '').replace('"', '').replace('"', '')
+    # KHÔNG gộp dấu chấm lặp - để model tự xử lý
+    text = text.replace('"', "")
+    text = text.replace('"', "")
+    text = text.replace('"', "")
+    # Chỉ gộp dấu phẩy dư thừa
     text = re.sub(r',+', ',', text)
+    text = text.replace(" , ", " ")
     return " ".join(text.split())
-
-def split_audio_by_marker(wave, sample_rate, marker_duration_sec=0.05, energy_threshold=1e-5):
-    """
-    Tách audio tại các đoạn im lặng (marker_duration_sec GIẢM xuống 0.05s)
-    """
-    chunk_size = int(marker_duration_sec * sample_rate)
-    min_segment_length = int(0.15 * sample_rate)  # Giảm từ 0.2s → 0.15s
-    segments = []
-    current = []
-    last_non_silent = 0
-
-    for i in range(0, len(wave), chunk_size // 2):
-        start = i
-        end = min(i + chunk_size, len(wave))
-        chunk = wave[start:end]
-        energy = np.mean(chunk ** 2)
-
-        if energy < energy_threshold:
-            # Im lặng → có thể là marker
-            if len(current) > 0 and sum(len(c) for c in current) > min_segment_length:
-                segment = np.concatenate(current)
-                if len(segment) > min_segment_length:
-                    segments.append(segment)
-                current = []
-                last_non_silent = end
-        else:
-            # Có âm → thêm vào current
-            if len(current) == 0 and i > last_non_silent:
-                current.append(wave[max(0, i - chunk_size):end])
-            else:
-                current.append(chunk)
-            last_non_silent = end
-
-    # Thêm đoạn cuối
-    if len(current) > 0 and sum(len(c) for c in current) > min_segment_length // 2:
-        segment = np.concatenate(current)
-        if len(segment) > 0:
-            segments.append(segment)
-
-    # Nếu không tách được → trả về 1 đoạn duy nhất
-    if len(segments) == 0 and len(wave) > 0:
-        segments.append(wave)
-
-    return segments
-
-def insert_silence_between(segments, silence_durations):
-    """Ghép các đoạn với silence (NGẮN HƠN)"""
-    if len(segments) == 0:
-        return np.array([], dtype=np.float32)
-    result = [segments[0]]
-    for i in range(1, len(segments)):
-        silence_dur = silence_durations[min(i-1, len(silence_durations)-1)]
-        silence = np.zeros(int(silence_dur * 24000), dtype=np.float32)
-        result.extend([silence, segments[i]])
-    return np.concatenate(result)
-
-def speed_up_audio(wave, sample_rate, speed_factor=1.0):
-    """
-    Tăng tốc audio bằng cách resample
-    speed_factor > 1.0: nhanh hơn
-    speed_factor < 1.0: chậm hơn
-    """
-    if speed_factor == 1.0:
-        return wave
-    
-    from scipy import signal
-    
-    # Tính số mẫu mới
-    num_samples = int(len(wave) / speed_factor)
-    
-    # Resample
-    wave_resampled = signal.resample(wave, num_samples)
-    
-    return wave_resampled.astype(np.float32)
-
 
 # Load models
 vocoder = load_vocoder()
@@ -148,116 +95,186 @@ model = load_model(
 )
 
 @spaces.GPU
-def infer_tts(ref_audio_orig: str, gen_text: str, speed: float = 1.0,
+def infer_tts(ref_audio_orig: str, gen_text: str, speed: float = 1.0, 
               pause_level: str = "Medium", request: gr.Request = None):
+    """
+    TTS inference - xử lý toàn bộ văn bản một lần với pause markers.
+    """
     if not ref_audio_orig:
         raise gr.Error("Please upload a sample audio file.")
     if not gen_text.strip():
         raise gr.Error("Please enter the text content to generate voice.")
-
+    
     try:
         print(f"\n{'='*60}")
-        print(f"Starting Fast TTS (speed={speed})")
+        print(f"🎤 Starting TTS generation")
         print(f"{'='*60}")
-
-        # 1. Thêm pause marker (NGẮN HƠN)
-        text_with_markers = add_pause_markers(gen_text, pause_level)
-
-        # 2. Chuẩn hóa
-        normalized_text = post_process_text(TTSnorm(text_with_markers)).lower()
-
-        # 3. Preprocess ref
+        
+        # Thêm pause markers vào văn bản
+        processed_text = add_natural_pauses(gen_text, pause_level)
+        
+        print(f"\n📊 Stats:")
+        print(f"   Original length: {len(gen_text)} chars")
+        print(f"   Processed length: {len(processed_text)} chars")
+        print(f"   Word count: {len(processed_text.split())} words")
+        
+        # Preprocess reference audio
+        print(f"\n🔄 Processing reference audio...")
         ref_audio, ref_text = preprocess_ref_audio_text(ref_audio_orig, "")
-        print(f"Ref text: {ref_text[:100]}...")
-
-        # 4. Sinh audio toàn bộ với speed parameter
-        wave, sr, spectrogram = infer_process(
-            ref_audio, ref_text.lower(), normalized_text, model, vocoder, 
-            speed=speed  # Truyền speed vào model
+        print(f"   Reference text: {ref_text[:100]}...")
+        
+        # Chuẩn hóa văn bản (giữ lại dấu chấm lặp)
+        normalized_text = post_process(TTSnorm(processed_text)).lower()
+        
+        print(f"\n📝 Normalized text preview:")
+        print(f"   {normalized_text[:200]}...")
+        
+        # Tạo audio - XỬ LÝ TOÀN BỘ MỘT LẦN
+        print(f"\n🎵 Generating audio...")
+        final_wave, final_sample_rate, spectrogram = infer_process(
+            ref_audio, 
+            ref_text.lower(), 
+            normalized_text, 
+            model, 
+            vocoder, 
+            speed=speed
         )
-
-        print(f"Generated wave duration: {len(wave)/sr:.2f}s (before speedup)")
-
-        # 5. Tách audio tại marker (nhanh hơn: 0.05s thay vì 0.08s)
-        marker_segments = split_audio_by_marker(wave, sr, marker_duration_sec=0.05, energy_threshold=1e-5)
-        print(f"Detected {len(marker_segments)} audio segments")
-
-        # 6. Tính silence duration (GIẢM 50%)
-        silence_map = {
-            "Short":  [0.15, 0.05],   # Giảm từ 0.3s/0.15s
-            "Medium": [0.25, 0.15],   # Giảm từ 0.5s/0.25s
-            "Long":   [0.40, 0.25]    # Giảm từ 0.8s/0.4s
-        }
-        para_s, dia_s = silence_map.get(pause_level, [0.25, 0.15])
-
-        # Đếm số câu
-        sentences = re.findall(r'[.!?]+', gen_text)
-        dialogue_sentences = len(re.findall(r'"[^"]*[.!?]', gen_text))
-        narrative_sentences = len(sentences) - dialogue_sentences
-
-        silence_durations = [para_s] * narrative_sentences + [dia_s] * dialogue_sentences
-        silence_durations = silence_durations[:len(marker_segments)-1]
-
-        if len(silence_durations) < len(marker_segments) - 1:
-            silence_durations = [para_s] * (len(marker_segments) - 1)
-
-        # 7. Ghép lại
-        final_wave = insert_silence_between(marker_segments, silence_durations)
-
-        # 8. TĂNG TỐC AUDIO (nếu speed > 1.0)
-        if speed != 1.0:
-            final_wave = speed_up_audio(final_wave, sr, speed_factor=speed)
-            print(f"Applied speed factor: {speed}x")
-
-        duration = len(final_wave) / sr
-        print(f"Final audio: {duration:.2f}s | Speed: {speed}x")
-
-        # 9. Lưu spectrogram
-        with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as f:
-            spectrogram_path = f.name
+        
+        duration = len(final_wave) / final_sample_rate
+        print(f"\n✅ Audio generated successfully!")
+        print(f"   Duration: {duration:.2f}s")
+        print(f"   Sample rate: {final_sample_rate}Hz")
+        print(f"{'='*60}\n")
+        
+        # Lưu spectrogram
+        with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp_spectrogram:
+            spectrogram_path = tmp_spectrogram.name
             save_spectrogram(spectrogram, spectrogram_path)
 
-        return (sr, final_wave), spectrogram_path
-
+        return (final_sample_rate, final_wave), spectrogram_path
+    
     except Exception as e:
         import traceback
         traceback.print_exc()
-        raise gr.Error(f"Error: {e}")
+        raise gr.Error(f"Error generating voice: {e}")
 
-# ==================== GRADIO UI ====================
+# Gradio UI
 with gr.Blocks(theme=gr.themes.Soft()) as demo:
     gr.Markdown("""
-    # F5-TTS Fast: **Tốc độ đọc nhanh hơn**
-    ### ✅ Giảm pause markers (|, ||, |||)
-    ### ✅ Giảm 50% silence duration
-    ### ✅ Hỗ trợ tăng tốc audio (speed > 1.0)
-    """)
-
-    with gr.Row():
-        ref_audio = gr.Audio(label="Sample Voice", type="filepath")
-        gen_text = gr.Textbox(
-            label="Text to Generate", lines=10,
-            placeholder="Hắn ngồi trên tàu. Mắt nhìn xa.\n\n\"Toa về bao lâu?\"\n\n\"Merci beaucoup!\""
-        )
-
-    with gr.Row():
-        speed = gr.Slider(0.8, 2.0, 1.3, step=0.1, label="Speed (khuyên dùng 1.2-1.5)")
-        pause_level = gr.Radio(["Short", "Medium", "Long"], "Short", label="Pause Level (dùng Short để nhanh)")
-
-    btn = gr.Button("Generate Voice", variant="primary")
-    with gr.Row():
-        out_audio = gr.Audio(label="Generated Audio", type="numpy")
-        out_spec = gr.Image(label="Spectrogram")
-
-    gr.Markdown("""
-    ### Cách tăng tốc độ đọc:
-    1. **Tăng Speed slider**: 1.0 → 1.3 → 1.5 (nhanh hơn 30-50%)
-    2. **Chọn Pause Level = Short**: Giảm khoảng lặng giữa các câu
-    3. **Kết hợp cả 2**: Speed=1.5 + Short = nhanh nhất
+    # 🎤 F5-TTS: Vietnamese Text-to-Speech Synthesis
+    ### Model trained with ~1000 hours of data on RTX 3090 GPU
     
-    **Lưu ý:** Speed quá cao (>1.8) có thể làm giọng nghe không tự nhiên
+    Enter text and upload a sample voice to generate natural speech with **intelligent pause control**.
+    
+    ✨ **Smart Pause Feature**: Automatically adds natural pauses using special markers!
     """)
+    
+    with gr.Row():
+        ref_audio = gr.Audio(label="🔊 Sample Voice", type="filepath")
+        gen_text = gr.Textbox(
+            label="📝 Text to Generate", 
+            placeholder="""Enter text with paragraphs separated by blank lines...
 
-    btn.click(infer_tts, [ref_audio, gen_text, speed, pause_level], [out_audio, out_spec])
+Example:
+Hắn lúc này đang ngồi trên boong tàu. Mắt nhìn ra biển xa.
 
+"Toa lần này trở về nhà chơi được bao lâu?"
+
+Người hỏi là một người bạn tình cờ gặp.
+
+"Meci beaucoup!"
+""", 
+            lines=10
+        )
+    
+    with gr.Row():
+        speed = gr.Slider(
+            minimum=0.3, 
+            maximum=2.0, 
+            value=1.0, 
+            step=0.1, 
+            label="⚡ Speed"
+        )
+        pause_level = gr.Radio(
+            choices=["Short", "Medium", "Long"],
+            value="Medium",
+            label="⏸️ Pause Duration",
+            info="Controls natural pauses after sentences"
+        )
+    
+    btn_synthesize = gr.Button("🔥 Generate Voice", variant="primary", size="lg")
+    
+    with gr.Row():
+        output_audio = gr.Audio(label="🎧 Generated Audio", type="numpy")
+        output_spectrogram = gr.Image(label="📊 Spectrogram")
+    
+    gr.Markdown("""
+    ### 💡 How It Works:
+    
+    | Feature | Description |
+    |---------|-------------|
+    | **Single-Pass Processing** | Entire text processed at once (no sentence splitting!) |
+    | **Pause Markers** | Uses dot sequences (`...`) to create natural pauses |
+    | **Automatic Detection** | Distinguishes narrative vs dialogue paragraphs |
+    | **No Weird Sounds** | Dots create smoother pauses than commas |
+    | **Three Levels** | Short (quick), Medium (natural), Long (dramatic) |
+    
+    ### 📖 Pause Levels:
+    - **Short**: Quick pauses (2-3 dots) - best for news, fast reading
+    - **Medium**: Natural pauses (3-5 dots) - recommended for stories
+    - **Long**: Dramatic pauses (5-7 dots) - ideal for audiobooks
+    
+    ### 🎯 Example Processing:
+    
+    **Input:**
+    ```
+    Hắn ngồi trên tàu. Mắt nhìn ra biển.
+    
+    "Xin chào!"
+    ```
+    
+    **After Pause Injection (Medium):**
+    ```
+    Hắn ngồi trên tàu. ..... Mắt nhìn ra biển. .....
+    
+    "Xin chào!" ...
+    ```
+    
+    The model reads the dots as natural pauses, creating rhythm without weird sounds!
+    
+    ### ✅ Advantages:
+    - ✨ **No skipped sentences** - all text is read including "Meci beaucoup!"
+    - 🎵 **Natural rhythm** - dots create smoother pauses than commas
+    - ⚡ **Fast processing** - single pass through the model
+    - 🎯 **Consistent quality** - same as original code but with better pauses
+    
+    ### 📝 Usage Tips:
+    - Separate major sections with **double line breaks** (`\\n\\n`)
+    - Quote dialogue: `"Hello," she said.`
+    - Short sentences are automatically handled (no skipping!)
+    - Experiment with pause levels to find what sounds best
+    """)
+    
+    with gr.Accordion("❗ Model Limitations", open=False):
+        gr.Markdown("""
+        1. **Numbers & Special Characters**: May not handle dates, phone numbers perfectly
+        2. **Audio Quality**: Use clear reference audio with minimal background noise
+        3. **Reference Text**: Auto-transcribed using Whisper (may have errors)
+        4. **Very Long Text**: Texts over 1000 words may produce inconsistent results
+        5. **Foreign Words**: May not pronounce non-Vietnamese words correctly
+        
+        ### 🔧 Troubleshooting:
+        - If pauses sound unnatural, try a different pause level
+        - If you hear weird sounds, use "Short" pause level
+        - For very long texts, consider splitting into multiple generations
+        """)
+
+    # Connect button to function
+    btn_synthesize.click(
+        infer_tts, 
+        inputs=[ref_audio, gen_text, speed, pause_level], 
+        outputs=[output_audio, output_spectrogram]
+    )
+
+# Launch with public link
 demo.queue().launch(share=True)
