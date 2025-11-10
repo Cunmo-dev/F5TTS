@@ -63,42 +63,63 @@ def post_process_text(text):
     text = re.sub(r',+', ',', text)
     return " ".join(text.split())
 
-def split_audio_by_marker(wave, sample_rate, marker_duration_sec=0.05):
+def split_audio_by_marker(wave, sample_rate, marker_duration_sec=0.08, energy_threshold=1e-5):
     """
-    Tách audio tại các đoạn im lặng ngắn (do model phát marker)
+    Tách audio tại các đoạn im lặng (do model phát marker |||)
     """
     chunk_size = int(marker_duration_sec * sample_rate)
-    min_silence_energy = 1e-6
+    min_segment_length = int(0.2 * sample_rate)  # ít nhất 0.2s mỗi đoạn
     segments = []
     current = []
+    last_non_silent = 0
 
-    for i in range(0, len(wave) - chunk_size, chunk_size // 2):
-        chunk = wave[i:i + chunk_size]
+    for i in range(0, len(wave), chunk_size // 2):
+        start = i
+        end = min(i + chunk_size, len(wave))
+        chunk = wave[start:end]
         energy = np.mean(chunk ** 2)
-        if energy < min_silence_energy and len(current) > 0:
-            segments.append(np.concatenate(current))
-            current = []
+
+        if energy < energy_threshold:
+            # Im lặng → có thể là marker
+            if len(current) > min_segment_length:
+                # Đã đủ dài → cắt đoạn
+                segment = np.concatenate(current)
+                if len(segment) > min_segment_length:
+                    segments.append(segment)
+                current = []
+                last_non_silent = end
         else:
-            if len(current) == 0:
-                start = max(0, i - chunk_size)
-                current = wave[start:i + chunk_size].tolist()
+            # Có âm → thêm vào current
+            if len(current) == 0 and i > last_non_silent:
+                # Bắt đầu đoạn mới
+                current = wave[max(0, i - chunk_size):end].tolist()
             else:
                 current.extend(chunk.tolist())
+            last_non_silent = end
 
-    if len(current) > sample_rate * 0.1:
-        segments.append(np.array(current))
+    # Thêm đoạn cuối
+    if len(current) > min_segment_length // 2:
+        segment = np.concatenate(current)
+        if len(segment) > 0:
+            segments.append(segment)
+
+    # Nếu không tách được → trả về 1 đoạn duy nhất
+    if len(segments) == 0 and len(wave) > 0:
+        segments.append(wave)
 
     return segments
 
 def insert_silence_between(segments, silence_durations):
-    """Ghép các đoạn audio với silence thật"""
-    result = []
-    for i, seg in enumerate(segments):
-        result.append(seg)
-        if i < len(segments) - 1 and i < len(silence_durations):
-            silence = np.zeros(int(silence_durations[i] * 24000), dtype=np.float32)
-            result.append(silence)
-    return np.concatenate(result) if result else np.array([])
+    """Ghép các đoạn với silence thật"""
+    if len(segments) == 0:
+        return np.array([], dtype=np.float32)
+    result = [segments[0]]
+    for i in range(1, len(segments)):
+        silence_dur = silence_durations[min(i-1, len(silence_durations)-1)]
+        silence = np.zeros(int(silence_dur * 24000), dtype=np.float32)
+        result.extend([silence, segments[i]])
+    return np.concatenate(result)
+
 
 # Load models
 vocoder = load_vocoder()
@@ -137,10 +158,13 @@ def infer_tts(ref_audio_orig: str, gen_text: str, speed: float = 1.0,
             ref_audio, ref_text.lower(), normalized_text, model, vocoder, speed=speed
         )
 
-        # 5. Tách audio tại marker (im lặng do model tạo)
-        marker_segments = split_audio_by_marker(wave, sr, marker_duration_sec=0.08)
+       # Thay thế đoạn từ dòng ~140 trở đi:
+        # 5. Tách audio tại marker
+        marker_segments = split_audio_by_marker(wave, sr, marker_duration_sec=0.08, energy_threshold=1e-6)
 
-        # 6. Tính silence duration theo pause_level
+        print(f"Detected {len(marker_segments)} audio segments")
+
+        # 6. Tính silence duration
         silence_map = {
             "Short":  [0.3, 0.15],
             "Medium": [0.5, 0.25],
@@ -148,13 +172,19 @@ def infer_tts(ref_audio_orig: str, gen_text: str, speed: float = 1.0,
         }
         para_s, dia_s = silence_map.get(pause_level, [0.5, 0.25])
 
-        # Đếm số marker trong văn bản → suy ra số pause
-        para_count = len(re.findall(r'||||', normalized_text)) // 5
-        dia_count = len(re.findall(r'|||', normalized_text)) // 3
-        silence_durations = [para_s] * para_count + [dia_s] * dia_count
-        silence_durations = silence_durations[:len(marker_segments)-1]  # trừ đoạn cuối
+        # Đếm số câu trong văn bản gốc
+        sentences = re.findall(r'[.!?]+', gen_text)
+        dialogue_sentences = len(re.findall(r'"[^"]*[.!?]', gen_text))
+        narrative_sentences = len(sentences) - dialogue_sentences
 
-        # 7. Ghép lại với silence thật
+        silence_durations = [para_s] * narrative_sentences + [dia_s] * dialogue_sentences
+        silence_durations = silence_durations[:len(marker_segments)-1]
+
+        # Nếu không đủ pause → dùng mặc định
+        if len(silence_durations) < len(marker_segments) - 1:
+            silence_durations = [para_s] * (len(marker_segments) - 1)
+
+        # 7. Ghép lại
         final_wave = insert_silence_between(marker_segments, silence_durations)
 
         duration = len(final_wave) / sr
