@@ -81,7 +81,7 @@ def split_audio_by_marker(wave, sample_rate, marker_duration_sec=0.08, energy_th
 
         if energy < energy_threshold:
             # Im lặng → có thể là marker
-            if len(current) > min_segment_length:
+            if len(current) > 0 and sum(len(c) for c in current) > min_segment_length:
                 # Đã đủ dài → cắt đoạn
                 segment = np.concatenate(current)
                 if len(segment) > min_segment_length:
@@ -91,14 +91,14 @@ def split_audio_by_marker(wave, sample_rate, marker_duration_sec=0.08, energy_th
         else:
             # Có âm → thêm vào current
             if len(current) == 0 and i > last_non_silent:
-                # Bắt đầu đoạn mới
-                current = wave[max(0, i - chunk_size):end].tolist()
+                # Bắt đầu đoạn mới - giữ dạng numpy array
+                current.append(wave[max(0, i - chunk_size):end])
             else:
-                current.extend(chunk.tolist())
+                current.append(chunk)
             last_non_silent = end
 
     # Thêm đoạn cuối
-    if len(current) > min_segment_length // 2:
+    if len(current) > 0 and sum(len(c) for c in current) > min_segment_length // 2:
         segment = np.concatenate(current)
         if len(segment) > 0:
             segments.append(segment)
