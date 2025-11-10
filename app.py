@@ -73,7 +73,7 @@ def split_text_into_sentences(text, pause_paragraph_duration=0.8, pause_dialogue
         if current_sentence.strip() and len(current_sentence.strip().split()) >= 1:
             chunks.append((current_sentence.strip(), pause_duration))
     
-    # Gộp các câu quá ngắn (dưới 3 từ)
+    # Gộp câu CHỈ với câu tường thuật ngắn, GIỮ NGUYÊN hội thoại
     merged_chunks = []
     temp_sentence = ""
     temp_pause = pause_paragraph_duration
@@ -81,28 +81,36 @@ def split_text_into_sentences(text, pause_paragraph_duration=0.8, pause_dialogue
     for i, (sentence, pause) in enumerate(chunks):
         word_count = len(sentence.split())
         is_last = (i == len(chunks) - 1)
+        is_dialogue = (pause == pause_dialogue_duration)
         
-        if word_count >= 3:
-            # Câu đủ dài
+        # HỘI THOẠI: Giữ nguyên bất kể độ dài
+        if is_dialogue:
             if temp_sentence:
-                merged_chunks.append((temp_sentence + " " + sentence, pause))
-                temp_sentence = ""
-            else:
-                merged_chunks.append((sentence, pause))
-        else:
-            # Câu ngắn, tích lũy
-            if temp_sentence:
-                temp_sentence += " " + sentence
-            else:
-                temp_sentence = sentence
-                temp_pause = pause
-            
-            # Xuất nếu: đã đủ 3 từ HOẶC là câu cuối
-            should_output = (len(temp_sentence.split()) >= 3) or is_last
-            
-            if should_output:
+                # Xuất câu tường thuật tích lũy trước
                 merged_chunks.append((temp_sentence, temp_pause))
                 temp_sentence = ""
+            merged_chunks.append((sentence, pause))
+        
+        # TƯỜNG THUẬT: Gộp nếu quá ngắn (< 3 từ)
+        else:
+            if word_count >= 3:
+                if temp_sentence:
+                    merged_chunks.append((temp_sentence + " " + sentence, pause))
+                    temp_sentence = ""
+                else:
+                    merged_chunks.append((sentence, pause))
+            else:
+                # Câu ngắn, tích lũy
+                if temp_sentence:
+                    temp_sentence += " " + sentence
+                else:
+                    temp_sentence = sentence
+                    temp_pause = pause
+                
+                # Xuất nếu câu cuối
+                if is_last:
+                    merged_chunks.append((temp_sentence, temp_pause))
+                    temp_sentence = ""
     
     # Thêm phần cuối nếu còn sót
     if temp_sentence:
@@ -301,8 +309,9 @@ Hắn liền lột vỏ một trái rồi cắn xuống.""",
     |---------|-------------|
     | **Line-by-Line Processing** | Each line is processed separately |
     | **Dialogue Detection** | Automatically detects quoted speech with `"..."` |
+    | **Dialogue Preservation** | ALL dialogue lines kept intact (even 1 word like "Vậy...") |
+    | **Narrative Merging** | Only short narrative sentences (< 3 words) are merged |
     | **Real Silence** | Actual silent gaps (no fake sounds!) |
-    | **Smart Merging** | Combines short sentences (< 3 words) automatically |
     | **Three Levels** | Short (0.4s/0.2s), Medium (0.8s/0.4s), Long (1.2s/0.6s) |
     
     ### 📖 Usage Tips:
@@ -338,7 +347,7 @@ Hắn liền lột vỏ một trái rồi cắn xuống.""",
         3. **Reference Text**: Auto-transcribed with Whisper (may have errors)
         4. **Processing Time**: Increases with text length (sentence-by-sentence processing)
         5. **Foreign Words**: May not pronounce non-Vietnamese words correctly
-        6. **Very Short Sentences**: Automatically merged with nearby sentences (< 3 words)
+        6. **Narrative Merging**: Only short narrative sentences (< 3 words) are merged. All dialogue preserved.
         """)
 
     # Connect button to function
