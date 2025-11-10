@@ -1,5 +1,7 @@
-import spaces
 import os
+os.environ["MPLBACKEND"] = "Agg"
+
+import spaces
 from huggingface_hub import login
 import gradio as gr
 from cached_path import cached_path
@@ -16,9 +18,6 @@ from f5_tts.infer.utils_infer import (
     infer_process,
     save_spectrogram,
 )
-
-# Set matplotlib backend
-os.environ["MPLBACKEND"] = "Agg"
 
 # Retrieve token from secrets
 hf_token = os.getenv("HUGGINGFACEHUB_API_TOKEN")
