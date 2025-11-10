@@ -71,7 +71,7 @@ def split_text_into_sentences(text, pause_paragraph_duration=0.8, pause_dialogue
                 sentence_text = current_sentence.strip()
                 
                 # Chỉ thêm nếu câu có ít nhất 3 từ
-                if sentence_text and len(sentence_text.split()) >= 3:
+                if sentence_text and len(sentence_text.split()) >= 1:
                     chunks.append((sentence_text, pause_duration))
                     current_sentence = ""
                 elif sentence_text:
