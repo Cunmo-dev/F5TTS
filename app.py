@@ -107,7 +107,7 @@ def split_text_into_sentences(text, pause_paragraph_duration=0.8, pause_dialogue
                 temp_pause = pause
             
             # Xuất nếu: đã đủ 5 từ HOẶC là câu cuối và có ít nhất 2 từ
-            should_output = (len(temp_sentence.split()) >= 2) or (is_last and len(temp_sentence.split()) >= 1)
+            should_output = (len(temp_sentence.split()) >= 5) or (is_last and len(temp_sentence.split()) >= 1)
             
             if should_output:
                 merged_chunks.append((temp_sentence, temp_pause))
