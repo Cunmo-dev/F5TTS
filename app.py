@@ -19,27 +19,52 @@ from f5_tts.infer.utils_infer import (
 )
 
 # Retrieve token from secrets
-hf_token = os.getenv("HUGGINGFACEHUB_API_TOKEN")
+hf_token = os.getenv("HUGGINGFACAHUB_API_TOKEN")
 
 # Log in to Hugging Face
 if hf_token:
     login(token=hf_token)
 
+def convert_time_to_dots(pause_seconds, dots_per_second=10):
+    """
+    Chuyển đổi thời gian pause (giây) thành số lượng dots.
+    
+    Args:
+        pause_seconds: Thời gian pause mong muốn (giây)
+        dots_per_second: Hệ số chuyển đổi (mặc định: 10 dots = 1 giây)
+    
+    Returns:
+        str: Chuỗi dots tương ứng
+    """
+    num_dots = max(2, int(pause_seconds * dots_per_second))  # Tối thiểu 2 dots
+    return "." * num_dots
+
 def add_natural_pauses(text, pause_level="Medium"):
     """
     Thêm ký hiệu đặc biệt để tạo khoảng dừng tự nhiên.
-    Sử dụng dấu chấm lặp (...) thay vì dấu phẩy để tránh âm lạ.
+    Sử dụng thời gian (giây) để tính số dots tương ứng.
     """
-    # Cấu hình pause bằng dấu chấm lặp
-    pause_configs = {
-        "Short": (".....", "...."),         # Paragraph: 3 dots, Dialogue: 2 dots
-        "Medium": (".......", "....."),     # Paragraph: 5 dots, Dialogue: 3 dots
-        "Long": (".........", "......."),   # Paragraph: 7 dots, Dialogue: 5 dots
+    # Cấu hình pause theo thời gian (giây)
+    pause_time_configs = {
+        "Short": (0.4, 0.2),    # Paragraph: 0.4s, Dialogue: 0.2s
+        "Medium": (0.8, 0.4),   # Paragraph: 0.8s, Dialogue: 0.4s
+        "Long": (1.2, 0.6)      # Paragraph: 1.2s, Dialogue: 0.6s
     }
     
-    pause_paragraph, pause_dialogue = pause_configs.get(pause_level, (".....", "..."))
+    pause_paragraph_time, pause_dialogue_time = pause_time_configs.get(
+        pause_level, (0.8, 0.4)
+    )
     
-    print(f"\n🎛️ Pause markers: Paragraph='{pause_paragraph}', Dialogue='{pause_dialogue}'")
+    # Chuyển đổi thời gian thành dots
+    # Công thức: 1 giây ≈ 5 dots (có thể điều chỉnh)
+    dots_per_second = 5
+    pause_paragraph = convert_time_to_dots(pause_paragraph_time, dots_per_second)
+    pause_dialogue = convert_time_to_dots(pause_dialogue_time, dots_per_second)
+    
+    print(f"\n🎛️ Pause configuration:")
+    print(f"   Level: {pause_level}")
+    print(f"   Paragraph: {pause_paragraph_time}s → '{pause_paragraph}' ({len(pause_paragraph)} dots)")
+    print(f"   Dialogue: {pause_dialogue_time}s → '{pause_dialogue}' ({len(pause_dialogue)} dots)")
     
     # Tách theo dòng trống để phân biệt đoạn văn
     paragraphs = text.split('\n\n')
@@ -164,9 +189,9 @@ with gr.Blocks(theme=gr.themes.Soft()) as demo:
     # 🎤 F5-TTS: Vietnamese Text-to-Speech Synthesis
     ### Model trained with ~1000 hours of data on RTX 3090 GPU
     
-    Enter text and upload a sample voice to generate natural speech with **intelligent pause control**.
+    Enter text and upload a sample voice to generate natural speech with **time-based intelligent pause control**.
     
-    ✨ **Smart Pause Feature**: Automatically adds natural pauses using special markers!
+    ✨ **Smart Pause Feature**: Converts pause time (seconds) to dot markers automatically!
     """)
     
     with gr.Row():
@@ -199,7 +224,7 @@ Người hỏi là một người bạn tình cờ gặp.
             choices=["Short", "Medium", "Long"],
             value="Medium",
             label="⏸️ Pause Duration",
-            info="Controls natural pauses after sentences"
+            info="Controls natural pauses after sentences (time-based)"
         )
     
     btn_synthesize = gr.Button("🔥 Generate Voice", variant="primary", size="lg")
@@ -209,50 +234,60 @@ Người hỏi là một người bạn tình cờ gặp.
         output_spectrogram = gr.Image(label="📊 Spectrogram")
     
     gr.Markdown("""
-    ### 💡 How It Works:
+    ### 💡 How Time-Based Pause Works:
     
     | Feature | Description |
     |---------|-------------|
-    | **Single-Pass Processing** | Entire text processed at once (no sentence splitting!) |
-    | **Pause Markers** | Uses dot sequences (`...`) to create natural pauses |
-    | **Automatic Detection** | Distinguishes narrative vs dialogue paragraphs |
-    | **No Weird Sounds** | Dots create smoother pauses than commas |
-    | **Three Levels** | Short (quick), Medium (natural), Long (dramatic) |
+    | **Time Configuration** | Set pause duration in seconds (e.g., 0.4s, 0.8s) |
+    | **Auto Conversion** | Converts time to dots (1 second ≈ 5 dots) |
+    | **Paragraph vs Dialogue** | Different pause times for narrative and speech |
+    | **Single-Pass Processing** | Entire text processed at once (no splitting!) |
+    | **Consistent Logic** | Same dot-based approach, just smarter configuration |
     
-    ### 📖 Pause Levels:
-    - **Short**: Quick pauses (2-3 dots) - best for news, fast reading
-    - **Medium**: Natural pauses (3-5 dots) - recommended for stories
-    - **Long**: Dramatic pauses (5-7 dots) - ideal for audiobooks
+    ### 📖 Pause Levels (Time → Dots):
+    
+    | Level | Paragraph | Dialogue | Use Case |
+    |-------|-----------|----------|----------|
+    | **Short** | 0.4s (2 dots) | 0.2s (1 dot) | News, fast reading |
+    | **Medium** | 0.8s (4 dots) | 0.4s (2 dots) | Stories, audiobooks |
+    | **Long** | 1.2s (6 dots) | 0.6s (3 dots) | Dramatic reading |
     
     ### 🎯 Example Processing:
     
-    **Input:**
+    **Input (with Medium level):**
     ```
     Hắn ngồi trên tàu. Mắt nhìn ra biển.
     
     "Xin chào!"
     ```
     
-    **After Pause Injection (Medium):**
+    **After Time-Based Conversion:**
     ```
-    Hắn ngồi trên tàu. ..... Mắt nhìn ra biển. .....
+    Paragraph (0.8s → 4 dots):
+    Hắn ngồi trên tàu. .... Mắt nhìn ra biển. ....
     
-    "Xin chào!" ...
+    Dialogue (0.4s → 2 dots):
+    "Xin chào!" ..
     ```
-    
-    The model reads the dots as natural pauses, creating rhythm without weird sounds!
     
     ### ✅ Advantages:
-    - ✨ **No skipped sentences** - all text is read including "Meci beaucoup!"
-    - 🎵 **Natural rhythm** - dots create smoother pauses than commas
-    - ⚡ **Fast processing** - single pass through the model
-    - 🎯 **Consistent quality** - same as original code but with better pauses
+    - ⏱️ **Intuitive Configuration** - think in seconds, not dots!
+    - 🎵 **Natural Rhythm** - automatic conversion ensures consistency
+    - ⚡ **Fast Processing** - single pass through model
+    - 🔧 **Easy Adjustment** - change `dots_per_second` to fine-tune
+    - 📊 **Predictable Results** - time-based settings are easier to understand
+    
+    ### 🔧 Technical Details:
+    - **Conversion Formula**: `num_dots = pause_seconds × dots_per_second`
+    - **Default Rate**: 5 dots/second (adjustable in code)
+    - **Minimum**: Always at least 2 dots to ensure pause effect
     
     ### 📝 Usage Tips:
     - Separate major sections with **double line breaks** (`\\n\\n`)
     - Quote dialogue: `"Hello," she said.`
     - Short sentences are automatically handled (no skipping!)
     - Experiment with pause levels to find what sounds best
+    - If pauses too long/short, adjust `dots_per_second` in code
     """)
     
     with gr.Accordion("❗ Model Limitations", open=False):
@@ -262,9 +297,11 @@ Người hỏi là một người bạn tình cờ gặp.
         3. **Reference Text**: Auto-transcribed using Whisper (may have errors)
         4. **Very Long Text**: Texts over 1000 words may produce inconsistent results
         5. **Foreign Words**: May not pronounce non-Vietnamese words correctly
+        6. **Dot Calibration**: The 5 dots/second default may need adjustment based on model behavior
         
         ### 🔧 Troubleshooting:
-        - If pauses sound unnatural, try a different pause level
+        - If pauses too long: decrease `dots_per_second` (try 3-4)
+        - If pauses too short: increase `dots_per_second` (try 6-8)
         - If you hear weird sounds, use "Short" pause level
         - For very long texts, consider splitting into multiple generations
         """)
