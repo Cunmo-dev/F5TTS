@@ -29,7 +29,6 @@ if hf_token:
 def split_text_into_sentences(text, pause_paragraph_duration=0.8, pause_dialogue_duration=0.4):
     """
     Tách văn bản thành các câu, xử lý đúng hội thoại nhiều dòng.
-    KHÔNG GỘP các câu ngắn.
     
     Returns:
         list of tuples: [(sentence, pause_duration_in_seconds), ...]
@@ -71,16 +70,54 @@ def split_text_into_sentences(text, pause_paragraph_duration=0.8, pause_dialogue
                 current_sentence += part
                 sentence_text = current_sentence.strip()
                 
-                # Thêm tất cả các câu, bất kể độ dài
-                if sentence_text:
+                # Chỉ thêm nếu câu có ít nhất 3 từ
+                if sentence_text and len(sentence_text.split()) >= 3:
                     chunks.append((sentence_text, pause_duration))
                     current_sentence = ""
+                elif sentence_text:
+                    # Câu ngắn, giữ để gộp với câu sau
+                    current_sentence += " "
         
         # Thêm phần còn lại nếu có
-        if current_sentence.strip():
+        if current_sentence.strip() and len(current_sentence.strip().split()) >= 3:
             chunks.append((current_sentence.strip(), pause_duration))
     
-    return chunks
+    # Gộp các câu quá ngắn
+    merged_chunks = []
+    temp_sentence = ""
+    temp_pause = pause_paragraph_duration
+    
+    for i, (sentence, pause) in enumerate(chunks):
+        word_count = len(sentence.split())
+        is_last = (i == len(chunks) - 1)
+        
+        if word_count >= 5:
+            # Câu đủ dài
+            if temp_sentence:
+                merged_chunks.append((temp_sentence + " " + sentence, pause))
+                temp_sentence = ""
+            else:
+                merged_chunks.append((sentence, pause))
+        else:
+            # Câu ngắn, tích lũy
+            if temp_sentence:
+                temp_sentence += " " + sentence
+            else:
+                temp_sentence = sentence
+                temp_pause = pause
+            
+            # Xuất nếu: đã đủ 5 từ HOẶC là câu cuối và có ít nhất 2 từ
+            should_output = (len(temp_sentence.split()) >= 5) or (is_last and len(temp_sentence.split()) >= 2)
+            
+            if should_output:
+                merged_chunks.append((temp_sentence, temp_pause))
+                temp_sentence = ""
+    
+    # Thêm phần cuối nếu còn sót (tối thiểu 2 từ)
+    if temp_sentence and len(temp_sentence.split()) >= 2:
+        merged_chunks.append((temp_sentence, temp_pause))
+    
+    return merged_chunks
 
 def create_silence(duration_seconds, sample_rate=24000):
     """Tạo đoạn im lặng với thời gian xác định."""
@@ -154,8 +191,8 @@ def infer_tts(ref_audio_orig: str, gen_text: str, speed: float = 1.0,
             # Chuẩn hóa văn bản
             normalized_text = post_process(TTSnorm(sentence)).lower()
             
-            # Kiểm tra độ dài tối thiểu
-            if len(normalized_text.strip()) < 2:
+            # Kiểm tra độ dài
+            if len(normalized_text.strip()) < 5:
                 print(f"   ⏭️ Skipped (too short after normalize): '{normalized_text}'")
                 continue
             
@@ -273,7 +310,7 @@ Người hỏi là một người bạn tình cờ gặp.""",
     | **Paragraph Detection** | Separates narrative text by double line breaks |
     | **Dialogue Detection** | Identifies quoted speech (even multi-line) |
     | **Real Silence** | Actual silent gaps (no fake sounds!) |
-    | **No Merging** | Each sentence processed separately (no auto-merge) |
+    | **Smart Merging** | Combines short sentences automatically |
     | **Three Levels** | Short (0.4s/0.2s), Medium (0.8s/0.4s), Long (1.2s/0.6s) |
     
     ### 📖 Usage Tips:
@@ -282,7 +319,6 @@ Người hỏi là một người bạn tình cờ gặp.""",
     - **Short**: Fast-paced reading (news, announcements)
     - **Medium**: Natural storytelling (recommended)
     - **Long**: Dramatic audiobooks, poetry
-    - **All sentences** are processed individually, regardless of length
     
     ### 🎯 Example Input:
     ```
@@ -297,7 +333,6 @@ Người hỏi là một người bạn tình cờ gặp.""",
     - Each sentence is processed separately, then combined with real silence
     - Longer texts take more time but produce better pause quality
     - Multi-line dialogue is automatically detected and merged
-    - Very short sentences are NOT merged with others
     """)
     
     with gr.Accordion("❗ Model Limitations", open=False):
@@ -307,7 +342,7 @@ Người hỏi là một người bạn tình cờ gặp.""",
         3. **Reference Text**: Auto-transcribed with Whisper (may have errors)
         4. **Processing Time**: Increases with text length (sentence-by-sentence processing)
         5. **Foreign Words**: May not pronounce non-Vietnamese words correctly
-        6. **Very Short Sentences**: Processed individually (no auto-merging)
+        6. **Very Short Sentences**: Automatically merged with nearby sentences
         """)
 
     # Connect button to function
