@@ -156,9 +156,9 @@ def infer_tts(ref_audio_orig: str, gen_text: str, speed: float = 1.0,
     try:
         # Cấu hình pause (giây)
         pause_configs = {
-            "Short": (0.4, 0.2),    # Paragraph: 0.4s, Dialogue: 0.2s
-            "Medium": (0.8, 0.4),   # Paragraph: 0.8s, Dialogue: 0.4s
-            "Long": (1.2, 0.6)      # Paragraph: 1.2s, Dialogue: 0.6s
+            "Short": (0.2, 0.1),    # Paragraph: 0.4s, Dialogue: 0.2s
+            "Medium": (0.4, 0.2),   # Paragraph: 0.8s, Dialogue: 0.4s
+            "Long": (0.6, 0.3)      # Paragraph: 1.2s, Dialogue: 0.6s
         }
         
         pause_paragraph, pause_dialogue = pause_configs.get(pause_level, (0.8, 0.4))
