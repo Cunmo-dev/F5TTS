@@ -1,3 +1,4 @@
+
 import spaces
 import os
 from huggingface_hub import login
@@ -5,6 +6,8 @@ import gradio as gr
 from cached_path import cached_path
 import tempfile
 from vinorm import TTSnorm
+import numpy as np
+import re
 
 from f5_tts.model import DiT
 from f5_tts.infer.utils_infer import (
@@ -15,9 +18,11 @@ from f5_tts.infer.utils_infer import (
     save_spectrogram,
 )
 
+# Set matplotlib backend
+os.environ["MPLBACKEND"] = "Agg"
+
 # Retrieve token from secrets
 hf_token = os.getenv("HUGGINGFACEHUB_API_TOKEN")
-
 
 # Log in to Hugging Face
 if hf_token:
@@ -36,56 +41,167 @@ def post_process(text):
     text = text.replace('"', "")
     return " ".join(text.split())
 
+def split_sentences(text):
+    """
+    Tách văn bản thành các câu với xử lý đặc biệt cho hội thoại.
+    """
+    # Tách theo xuống dòng trước (để tách hội thoại)
+    lines = text.split('\n')
+    sentences = []
+    
+    for line in lines:
+        line = line.strip()
+        if not line:
+            continue
+        
+        # Nếu là hội thoại (bắt đầu bằng dấu ngoặc kép)
+        if line.startswith('"') or line.startswith('"'):
+            sentences.append(line)
+        else:
+            # Tách các câu thường theo dấu câu
+            parts = re.split(r'(?<=[.!?])\s+', line)
+            sentences.extend([s.strip() for s in parts if s.strip()])
+    
+    return sentences
+
+def add_silence(audio_array, sample_rate, duration_ms=500):
+    """
+    Thêm khoảng lặng vào cuối audio array.
+    """
+    silence_samples = int(sample_rate * duration_ms / 1000)
+    silence = np.zeros(silence_samples, dtype=audio_array.dtype)
+    return np.concatenate([audio_array, silence])
+
+def is_dialogue(text):
+    """
+    Kiểm tra xem câu có phải là hội thoại không.
+    """
+    text = text.strip()
+    return text.startswith('"') or text.startswith('"') or text.startswith('"')
+
 # Load models
 vocoder = load_vocoder()
 model = load_model(
     DiT,
     dict(dim=1024, depth=22, heads=16, ff_mult=2, text_dim=512, conv_layers=4),
     ckpt_path=str(cached_path("hf://thanhcong190693/F5TTSVN/model_last.pt")),
-vocab_file=str(cached_path("hf://thanhcong190693/F5TTSVN/config.json")),
+    vocab_file=str(cached_path("hf://thanhcong190693/F5TTSVN/config.json")),
 )
 
 @spaces.GPU
-def infer_tts(ref_audio_orig: str, gen_text: str, speed: float = 1.0, request: gr.Request = None):
-
+def infer_tts(ref_audio_orig: str, gen_text: str, speed: float = 1.0, 
+              pause_paragraph: int = 800, pause_dialogue: int = 400, 
+              request: gr.Request = None):
+    """
+    Args:
+        pause_paragraph: khoảng lặng sau đoạn văn tả (ms)
+        pause_dialogue: khoảng lặng sau câu hội thoại (ms)
+    """
     if not ref_audio_orig:
         raise gr.Error("Please upload a sample audio file.")
     if not gen_text.strip():
         raise gr.Error("Please enter the text content to generate voice.")
-    if len(gen_text.split()) > 1000:
-        raise gr.Error("Please enter text content with less than 1000 words.")
     
     try:
+        # Preprocess reference audio
         ref_audio, ref_text = preprocess_ref_audio_text(ref_audio_orig, "")
-        final_wave, final_sample_rate, spectrogram = infer_process(
-            ref_audio, ref_text.lower(), post_process(TTSnorm(gen_text)).lower(), model, vocoder, speed=speed
-        )
+        
+        # Tách văn bản thành các câu
+        sentences = split_sentences(gen_text)
+        
+        if len(sentences) == 0:
+            raise gr.Error("No valid sentences found in the text.")
+        
+        # Khởi tạo danh sách để lưu audio
+        audio_segments = []
+        sample_rate = None
+        all_spectrograms = []
+        
+        # Xử lý từng câu
+        for i, sentence in enumerate(sentences):
+            if not sentence.strip():
+                continue
+            
+            # Chuẩn hóa và xử lý câu
+            processed_sentence = post_process(TTSnorm(sentence)).lower()
+            
+            # Tạo audio cho câu
+            wave, sr, spectrogram = infer_process(
+                ref_audio, 
+                ref_text.lower(), 
+                processed_sentence, 
+                model, 
+                vocoder, 
+                speed=speed
+            )
+            
+            if sample_rate is None:
+                sample_rate = sr
+            
+            # Thêm khoảng lặng phù hợp
+            if i < len(sentences) - 1:
+                # Hội thoại: pause ngắn hơn
+                # Đoạn văn tả: pause dài hơn
+                pause = pause_dialogue if is_dialogue(sentence) else pause_paragraph
+                wave = add_silence(wave, sr, pause)
+            
+            audio_segments.append(wave)
+            all_spectrograms.append(spectrogram)
+        
+        # Ghép tất cả audio lại
+        final_wave = np.concatenate(audio_segments)
+        
+        # Tạo spectrogram tổng hợp
         with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp_spectrogram:
             spectrogram_path = tmp_spectrogram.name
-            save_spectrogram(spectrogram, spectrogram_path)
+            save_spectrogram(all_spectrograms[0], spectrogram_path)
 
-        return (final_sample_rate, final_wave), spectrogram_path
+        return (sample_rate, final_wave), spectrogram_path
+    
     except Exception as e:
         raise gr.Error(f"Error generating voice: {e}")
 
 # Gradio UI
 with gr.Blocks(theme=gr.themes.Soft()) as demo:
     gr.Markdown("""
-    # 🎤 F5-TTS: Vietnamese Text-to-Speech Synthesis.
-    # The model was trained with approximately 1000 hours of data on a RTX 3090 GPU. 
-    Enter text and upload a sample voice to generate natural speech.
+    # 🎤 F5-TTS: Vietnamese Text-to-Speech Synthesis
+    # The model was trained with approximately 1000 hours of data on a RTX 3090 GPU
+    Enter text and upload a sample voice to generate natural speech with intelligent pausing.
     """)
     
     with gr.Row():
         ref_audio = gr.Audio(label="🔊 Sample Voice", type="filepath")
-        gen_text = gr.Textbox(label="📝 Text", placeholder="Enter the text to generate voice...", lines=3)
+        gen_text = gr.Textbox(
+            label="📝 Text", 
+            placeholder="Enter the text to generate voice (supports paragraphs and dialogue)...", 
+            lines=8
+        )
     
-    speed = gr.Slider(0.3, 2.0, value=1.0, step=0.1, label="⚡ Speed")
+    with gr.Row():
+        speed = gr.Slider(0.3, 2.0, value=1.0, step=0.1, label="⚡ Speed")
+        pause_paragraph = gr.Slider(
+            200, 2000, value=800, step=100, 
+            label="⏸️ Pause After Paragraph (ms)"
+        )
+        pause_dialogue = gr.Slider(
+            100, 1500, value=400, step=50, 
+            label="💬 Pause After Dialogue (ms)"
+        )
+    
     btn_synthesize = gr.Button("🔥 Generate Voice")
     
     with gr.Row():
         output_audio = gr.Audio(label="🎧 Generated Audio", type="numpy")
         output_spectrogram = gr.Image(label="📊 Spectrogram")
+    
+    gr.Markdown("""
+    ### 💡 Tips:
+    - **Paragraph Pause**: Longer silence after descriptive text (default 800ms)
+    - **Dialogue Pause**: Shorter silence between dialogue lines (default 400ms)
+    - System automatically detects dialogue (text in quotes) vs narration
+    - For natural conversation flow, use 300-500ms for dialogue
+    - For dramatic reading, increase paragraph pause to 1000-1500ms
+    """)
     
     model_limitations = gr.Textbox(
         value="""1. This model may not perform well with numerical characters, dates, special characters, etc. => A text normalization module is needed.
@@ -97,7 +213,11 @@ with gr.Blocks(theme=gr.themes.Soft()) as demo:
         interactive=False
     )
 
-    btn_synthesize.click(infer_tts, inputs=[ref_audio, gen_text, speed], outputs=[output_audio, output_spectrogram])
+    btn_synthesize.click(
+        infer_tts, 
+        inputs=[ref_audio, gen_text, speed, pause_paragraph, pause_dialogue], 
+        outputs=[output_audio, output_spectrogram]
+    )
 
-# Run Gradio with share=True to get a gradio.live link
-demo.queue().launch()
+# Run Gradio with share=True
+demo.queue().launch(share=True)
