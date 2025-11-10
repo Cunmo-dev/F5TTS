@@ -50,11 +50,19 @@ def split_text_into_sentences(text, pause_paragraph_duration=0.8, pause_dialogue
         # Loại bỏ dấu ngoặc kép để xử lý
         clean_text = line.replace('"', '').replace('"', '').replace('"', '').strip()
         
+        # Chuẩn hóa dấu chấm liên tiếp (... -> .)
+        clean_text = re.sub(r'\.{2,}', '.', clean_text)
+        clean_text = re.sub(r'[.!?]{2,}', '.', clean_text)
+        
         # Tách thành các câu dựa trên dấu câu
-        sentences = re.split(r'([.!?]+)', clean_text)
+        sentences = re.split(r'([.!?])', clean_text)
         
         current_sentence = ""
         for i, part in enumerate(sentences):
+            part = part.strip()
+            if not part:
+                continue
+                
             if i % 2 == 0:  # Phần văn bản
                 current_sentence += part
             else:  # Dấu câu
@@ -65,11 +73,8 @@ def split_text_into_sentences(text, pause_paragraph_duration=0.8, pause_dialogue
                 if sentence_text and len(sentence_text.split()) >= 1:
                     chunks.append((sentence_text, pause_duration))
                     current_sentence = ""
-                elif sentence_text:
-                    # Câu ngắn, giữ để gộp với câu sau
-                    current_sentence += " "
         
-        # Thêm phần còn lại nếu có (tối thiểu 1 từ)
+        # Thêm phần còn lại nếu có (không có dấu câu kết thúc)
         if current_sentence.strip() and len(current_sentence.strip().split()) >= 1:
             chunks.append((current_sentence.strip(), pause_duration))
     
@@ -126,6 +131,8 @@ def create_silence(duration_seconds, sample_rate=24000):
 def post_process(text):
     """Làm sạch văn bản."""
     text = " " + text + " "
+    # Chuẩn hóa dấu chấm liên tiếp
+    text = re.sub(r'\.{2,}', '.', text)
     text = text.replace(" . . ", " . ")
     text = text.replace(" .. ", " . ")
     text = text.replace('"', "")
@@ -133,7 +140,9 @@ def post_process(text):
     text = text.replace('"', "")
     # Loại bỏ dấu phẩy dư thừa
     text = re.sub(r',+', ',', text)
-    return " ".join(text.split())
+    # Loại bỏ khoảng trắng dư thừa
+    text = " ".join(text.split())
+    return text
 
 # Load models
 vocoder = load_vocoder()
