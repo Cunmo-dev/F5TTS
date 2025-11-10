@@ -71,7 +71,7 @@ def split_text_into_sentences(text, pause_paragraph_duration=0.8, pause_dialogue
                 sentence_text = current_sentence.strip()
                 
                 # Chỉ thêm nếu câu có ít nhất 3 từ
-                if sentence_text and len(sentence_text.split()) >= 1:
+                if sentence_text and len(sentence_text.split()) >= 3:
                     chunks.append((sentence_text, pause_duration))
                     current_sentence = ""
                 elif sentence_text:
@@ -82,6 +82,43 @@ def split_text_into_sentences(text, pause_paragraph_duration=0.8, pause_dialogue
         if current_sentence.strip() and len(current_sentence.strip().split()) >= 3:
             chunks.append((current_sentence.strip(), pause_duration))
     
+    # Gộp các câu quá ngắn
+    merged_chunks = []
+    temp_sentence = ""
+    temp_pause = pause_paragraph_duration
+    
+    for i, (sentence, pause) in enumerate(chunks):
+        word_count = len(sentence.split())
+        is_last = (i == len(chunks) - 1)
+        
+        if word_count >= 5:
+            # Câu đủ dài
+            if temp_sentence:
+                merged_chunks.append((temp_sentence + " " + sentence, pause))
+                temp_sentence = ""
+            else:
+                merged_chunks.append((sentence, pause))
+        else:
+            # Câu ngắn, tích lũy
+            if temp_sentence:
+                temp_sentence += " " + sentence
+            else:
+                temp_sentence = sentence
+                temp_pause = pause
+            
+            # Xuất nếu: đã đủ 5 từ HOẶC là câu cuối và có ít nhất 2 từ
+            should_output = (len(temp_sentence.split()) >= 5) or (is_last and len(temp_sentence.split()) >= 2)
+            
+            if should_output:
+                merged_chunks.append((temp_sentence, temp_pause))
+                temp_sentence = ""
+    
+    # Thêm phần cuối nếu còn sót (tối thiểu 2 từ)
+    if temp_sentence and len(temp_sentence.split()) >= 2:
+        merged_chunks.append((temp_sentence, temp_pause))
+    
+    return merged_chunks
+
 def create_silence(duration_seconds, sample_rate=24000):
     """Tạo đoạn im lặng với thời gian xác định."""
     num_samples = int(duration_seconds * sample_rate)
