@@ -8,6 +8,7 @@ from cached_path import cached_path
 import tempfile
 from vinorm import TTSnorm
 import re
+import numpy as np
 
 from f5_tts.model import DiT
 from f5_tts.infer.utils_infer import (
@@ -25,84 +26,113 @@ hf_token = os.getenv("HUGGINGFACEHUB_API_TOKEN")
 if hf_token:
     login(token=hf_token)
 
-def add_smart_pauses(text, pause_level="Medium"):
+def split_text_into_sentences(text, pause_paragraph_duration=0.8, pause_dialogue_duration=0.4):
     """
-    Thêm pause markers thông minh dựa trên cấu trúc văn bản.
-    XỬ LÝ TOÀN BỘ MỘT LẦN - nhanh như Code 2, thông minh như Code 1.
+    Tách văn bản thành các câu, KHÔNG BỎ QUA bất kỳ câu nào (kể cả câu ngắn).
+    
+    Returns:
+        list of tuples: [(sentence, pause_duration_in_seconds), ...]
     """
-    # Cấu hình pause bằng dấu chấm lặp
-    pause_configs = {
-        "Short": ("...", ".."),         # Paragraph: 3 dots, Dialogue: 2 dots
-        "Medium": (".....", "..."),     # Paragraph: 5 dots, Dialogue: 3 dots
-        "Long": (".......", "....."),   # Paragraph: 7 dots, Dialogue: 5 dots
-    }
-    
-    pause_paragraph, pause_dialogue = pause_configs.get(pause_level, (".....", "..."))
-    
-    print(f"\n🎛️ Pause markers: Paragraph='{pause_paragraph}', Dialogue='{pause_dialogue}'")
+    chunks = []
     
     # Tách theo dòng trống để phân biệt đoạn văn
     paragraphs = text.split('\n\n')
-    processed_paragraphs = []
     
     for para in paragraphs:
         para = para.strip()
         if not para:
             continue
         
-        # Gộp các dòng trong cùng đoạn
+        # Kiểm tra xem đoạn này có phải toàn bộ là hội thoại không
         lines = para.split('\n')
         combined_text = ' '.join(line.strip() for line in lines if line.strip())
         
-        # Kiểm tra hội thoại (có dấu ngoặc)
+        # Đếm số dấu ngoặc
         open_quotes = combined_text.count('"') + combined_text.count('"')
         close_quotes = combined_text.count('"') + combined_text.count('"')
+        
+        # Nếu có dấu ngoặc và cân bằng -> hội thoại
         is_dialogue = (open_quotes > 0 and open_quotes == close_quotes)
+        pause_duration = pause_dialogue_duration if is_dialogue else pause_paragraph_duration
         
-        pause_marker = pause_dialogue if is_dialogue else pause_paragraph
+        # Loại bỏ dấu ngoặc kép để xử lý
+        clean_text = combined_text.replace('"', '').replace('"', '').replace('"', '').strip()
         
-        # Loại bỏ dấu ngoặc kép
-        clean_text = combined_text.replace('"', '').replace('"', '').replace('"', '')
-        
-        # LOGIC MỚI: Thêm pause sau mỗi dấu câu NHƯNG xử lý thông minh
-        # Tách câu để phân tích
+        # Tách thành các câu dựa trên dấu câu
         sentences = re.split(r'([.!?]+)', clean_text)
         
-        result_parts = []
+        current_sentence = ""
         for i, part in enumerate(sentences):
             if i % 2 == 0:  # Phần văn bản
-                if part.strip():
-                    result_parts.append(part.strip())
+                current_sentence += part
             else:  # Dấu câu
-                # Ghép dấu câu vào câu trước
-                if result_parts:
-                    result_parts[-1] += part
-                    # Thêm pause marker sau dấu câu
-                    result_parts[-1] += " " + pause_marker
+                current_sentence += part
+                sentence_text = current_sentence.strip()
+                
+                # THAY ĐỔI: Chỉ bỏ qua câu hoàn toàn rỗng, KHÔNG bỏ qua câu ngắn
+                if sentence_text:
+                    chunks.append((sentence_text, pause_duration))
+                    current_sentence = ""
         
-        # Gộp lại thành đoạn văn
-        processed_text = " ".join(result_parts)
-        processed_paragraphs.append(processed_text)
+        # Thêm phần còn lại nếu có (kể cả câu ngắn)
+        if current_sentence.strip():
+            chunks.append((current_sentence.strip(), pause_duration))
     
-    result = '\n\n'.join(processed_paragraphs)
+    # THAY ĐỔI: Gộp thông minh hơn - CHỈ gộp các câu CỰC NGẮN (< 3 từ)
+    # và KHÔNG gộp nếu câu có dấu chấm than hoặc chấm hỏi (thường là câu độc lập)
+    merged_chunks = []
+    temp_sentence = ""
+    temp_pause = pause_paragraph_duration
     
-    print(f"\n📝 Processed text preview:")
-    preview = result[:400] + "..." if len(result) > 400 else result
-    print(preview)
-    print(f"\n📊 Total length: {len(result)} chars, {len(result.split())} words")
+    for i, (sentence, pause) in enumerate(chunks):
+        word_count = len(sentence.split())
+        is_last = (i == len(chunks) - 1)
+        has_strong_punct = sentence.rstrip().endswith(('!', '?'))
+        
+        # LOGIC MỚI: Chỉ gộp nếu:
+        # 1. Câu CỰC NGẮN (< 3 từ)
+        # 2. KHÔNG có dấu chấm than/hỏi (câu độc lập)
+        # 3. KHÔNG phải câu cuối
+        should_merge = (word_count < 3) and (not has_strong_punct) and (not is_last)
+        
+        if should_merge and temp_sentence:
+            # Gộp với câu trước
+            temp_sentence += " " + sentence
+        elif should_merge:
+            # Bắt đầu tích lũy
+            temp_sentence = sentence
+            temp_pause = pause
+        else:
+            # Câu đủ dài hoặc có dấu mạnh -> xuất luôn
+            if temp_sentence:
+                # Xuất câu tích lũy trước
+                merged_chunks.append((temp_sentence + " " + sentence, pause))
+                temp_sentence = ""
+            else:
+                # Xuất câu hiện tại
+                merged_chunks.append((sentence, pause))
     
-    return result
+    # Xuất phần cuối nếu còn
+    if temp_sentence:
+        merged_chunks.append((temp_sentence, temp_pause))
+    
+    return merged_chunks
+
+def create_silence(duration_seconds, sample_rate=24000):
+    """Tạo đoạn im lặng với thời gian xác định."""
+    num_samples = int(duration_seconds * sample_rate)
+    return np.zeros(num_samples, dtype=np.float32)
 
 def post_process(text):
-    """Làm sạch văn bản - GIỮ LẠI dấu chấm lặp để tạo pause."""
+    """Làm sạch văn bản."""
     text = " " + text + " "
-    # KHÔNG gộp dấu chấm lặp - để model tự xử lý
+    text = text.replace(" . . ", " . ")
+    text = text.replace(" .. ", " . ")
     text = text.replace('"', "")
     text = text.replace('"', "")
     text = text.replace('"', "")
-    # Chỉ gộp dấu phẩy dư thừa
+    # Loại bỏ dấu phẩy dư thừa
     text = re.sub(r',+', ',', text)
-    text = text.replace(" , ", " ")
     return " ".join(text.split())
 
 # Load models
@@ -118,8 +148,8 @@ model = load_model(
 def infer_tts(ref_audio_orig: str, gen_text: str, speed: float = 1.0, 
               pause_level: str = "Medium", request: gr.Request = None):
     """
-    TTS inference - XỬ LÝ TOÀN BỘ MỘT LẦN (nhanh) với pause markers thông minh.
-    GIẢI PHÁP: Kết hợp tốc độ Code 2 + logic ngắt câu Code 1
+    TTS inference với pause thực sự bằng cách ghép audio.
+    BẢN CẢI TIẾN: Đọc HẾT mọi câu, kể cả câu ngắn và ngoại ngữ.
     """
     if not ref_audio_orig:
         raise gr.Error("Please upload a sample audio file.")
@@ -127,60 +157,127 @@ def infer_tts(ref_audio_orig: str, gen_text: str, speed: float = 1.0,
         raise gr.Error("Please enter the text content to generate voice.")
     
     try:
-        print(f"\n{'='*60}")
-        print(f"🎤 Starting TTS generation (SINGLE-PASS MODE)")
-        print(f"{'='*60}")
+        # Cấu hình pause (giây)
+        pause_configs = {
+            "Short": (0.2, 0.1),
+            "Medium": (0.4, 0.2),
+            "Long": (0.6, 0.3)
+        }
         
-        # Thêm pause markers thông minh vào văn bản
-        processed_text = add_smart_pauses(gen_text, pause_level)
+        pause_paragraph, pause_dialogue = pause_configs.get(pause_level, (0.4, 0.2))
         
-        print(f"\n📊 Stats:")
-        print(f"   Original length: {len(gen_text)} chars")
-        print(f"   Processed length: {len(processed_text)} chars")
-        print(f"   Added pause markers: {processed_text.count('.')}")
+        print(f"\n🎛️ Pause config: Paragraph={pause_paragraph}s, Dialogue={pause_dialogue}s")
+        
+        # Tách văn bản thành các câu với thời gian dừng
+        chunks = split_text_into_sentences(gen_text, pause_paragraph, pause_dialogue)
+        
+        print(f"\n📝 Total chunks: {len(chunks)}")
+        for idx, (sent, pause) in enumerate(chunks, 1):
+            print(f"   {idx}. [{pause}s] {sent[:80]}...")
+        
+        if not chunks:
+            raise gr.Error("No valid sentences found in text. Please check your input.")
         
         # Preprocess reference audio
-        print(f"\n🔄 Processing reference audio...")
         ref_audio, ref_text = preprocess_ref_audio_text(ref_audio_orig, "")
-        print(f"   Reference text: {ref_text[:100]}...")
         
-        # Chuẩn hóa văn bản - XỬ LÝ NGOẠI NGỮ
-        print(f"\n🌍 Normalizing text (with foreign word support)...")
-        try:
-            normalized_text = post_process(TTSnorm(processed_text)).lower()
-        except Exception as norm_error:
-            # Fallback nếu TTSnorm fail với ngoại ngữ
-            print(f"   ⚠️  TTSnorm failed: {norm_error}")
-            print(f"   🔄 Using original text without normalization")
-            normalized_text = post_process(processed_text).lower()
+        # Tạo audio cho từng câu và ghép lại
+        audio_segments = []
+        sample_rate = 24000
+        processed_count = 0
         
-        print(f"\n📝 Normalized text preview:")
-        print(f"   {normalized_text[:300]}...")
+        for i, (sentence, pause_duration) in enumerate(chunks):
+            print(f"\n🔄 [{i+1}/{len(chunks)}] Processing: {sentence[:80]}...")
+            
+            # Chuẩn hóa văn bản - QUAN TRỌNG: Bọc try-except để xử lý ngoại ngữ
+            try:
+                normalized_text = post_process(TTSnorm(sentence)).lower()
+            except Exception as norm_error:
+                # Nếu TTSnorm fail (có thể do ngoại ngữ), dùng văn bản gốc
+                print(f"   ⚠️  TTSnorm failed, using original text")
+                normalized_text = post_process(sentence).lower()
+            
+            # THAY ĐỔI: Chấp nhận cả câu rất ngắn (>= 1 từ thay vì >= 5 từ)
+            if len(normalized_text.strip().split()) < 1:
+                print(f"   ⏭️ Skipped (empty): '{normalized_text}'")
+                continue
+            
+            print(f"   📝 Normalized: {normalized_text[:80]}...")
+            
+            try:
+                # Tạo audio cho câu này
+                wave, sr, _ = infer_process(
+                    ref_audio, 
+                    ref_text.lower(), 
+                    normalized_text, 
+                    model, 
+                    vocoder, 
+                    speed=speed
+                )
+                
+                sample_rate = sr
+                audio_segments.append(wave)
+                processed_count += 1
+                print(f"   ✅ Generated {len(wave)/sr:.2f}s audio")
+                
+                # Thêm khoảng im lặng (trừ câu cuối)
+                if i < len(chunks) - 1:
+                    silence = create_silence(pause_duration, sample_rate)
+                    audio_segments.append(silence)
+                    print(f"   ⏸️  Added {pause_duration}s silence")
+                    
+            except Exception as e:
+                print(f"   ❌ Error processing chunk: {e}")
+                # THAY ĐỔI: Không bỏ qua hoàn toàn, thử xử lý đơn giản hơn
+                try:
+                    # Thử lần 2 với văn bản gốc không chuẩn hóa
+                    simple_text = sentence.lower().strip()
+                    wave, sr, _ = infer_process(
+                        ref_audio, 
+                        ref_text.lower(), 
+                        simple_text, 
+                        model, 
+                        vocoder, 
+                        speed=speed
+                    )
+                    sample_rate = sr
+                    audio_segments.append(wave)
+                    processed_count += 1
+                    print(f"   ✅ Retry successful with simple text")
+                    
+                    if i < len(chunks) - 1:
+                        silence = create_silence(pause_duration, sample_rate)
+                        audio_segments.append(silence)
+                except:
+                    print(f"   ❌ Retry also failed, skipping...")
+                    continue
         
-        # Tạo audio - XỬ LÝ TOÀN BỘ MỘT LẦN (NHANH!)
-        print(f"\n🎵 Generating audio (single pass)...")
-        final_wave, final_sample_rate, spectrogram = infer_process(
-            ref_audio, 
-            ref_text.lower(), 
-            normalized_text, 
-            model, 
-            vocoder, 
-            speed=speed
-        )
+        # Ghép tất cả audio lại
+        if not audio_segments:
+            raise gr.Error("No valid audio segments generated. Please check your text.")
+            
+        final_wave = np.concatenate(audio_segments)
         
-        duration = len(final_wave) / final_sample_rate
-        print(f"\n✅ Audio generated successfully!")
-        print(f"   Duration: {duration:.2f}s")
-        print(f"   Sample rate: {final_sample_rate}Hz")
-        print(f"   Processing mode: SINGLE-PASS (fast)")
-        print(f"{'='*60}\n")
+        print(f"\n✅ Final audio: {len(final_wave)/sample_rate:.2f}s ({processed_count}/{len(chunks)} segments)")
         
-        # Lưu spectrogram
+        # Tạo spectrogram
         with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp_spectrogram:
             spectrogram_path = tmp_spectrogram.name
-            save_spectrogram(spectrogram, spectrogram_path)
+            import matplotlib
+            matplotlib.use('Agg')
+            import matplotlib.pyplot as plt
+            
+            plt.figure(figsize=(12, 4))
+            plt.specgram(final_wave, Fs=sample_rate, cmap='viridis')
+            plt.xlabel('Time (s)')
+            plt.ylabel('Frequency (Hz)')
+            plt.title(f'Audio Spectrogram ({processed_count}/{len(chunks)} segments)')
+            plt.colorbar(format='%+2.0f dB')
+            plt.tight_layout()
+            plt.savefig(spectrogram_path)
+            plt.close()
 
-        return (final_sample_rate, final_wave), spectrogram_path
+        return (sample_rate, final_wave), spectrogram_path
     
     except Exception as e:
         import traceback
@@ -190,32 +287,30 @@ def infer_tts(ref_audio_orig: str, gen_text: str, speed: float = 1.0,
 # Gradio UI
 with gr.Blocks(theme=gr.themes.Soft()) as demo:
     gr.Markdown("""
-    # 🎤 F5-TTS: Vietnamese Text-to-Speech (FAST + SMART)
+    # 🎤 F5-TTS: Vietnamese Text-to-Speech Synthesis (Enhanced)
     ### Model trained with ~1000 hours of data on RTX 3090 GPU
     
-    ⚡ **OPTIMIZED**: Single-pass processing for maximum speed!  
-    🎯 **SMART**: Intelligent pause placement like multi-pass method!  
-    🌍 **MULTILINGUAL**: Handles foreign words (Merci, Thank you, etc.)
+    ✨ **NEW**: Now reads ALL sentences including short phrases and foreign words!
     
-    ✨ **Best of both worlds**: Fast as Code 2 + Smart as Code 1
+    🌍 **Multilingual Support**: Handles Vietnamese mixed with English, French, etc.
     """)
     
     with gr.Row():
         ref_audio = gr.Audio(label="🔊 Sample Voice", type="filepath")
         gen_text = gr.Textbox(
             label="📝 Text to Generate", 
-            placeholder="""Enter text with paragraphs separated by blank lines...
+            placeholder="""Enter text with paragraphs and dialogue...
 
-Example with mixed content:
+Example with mixed languages:
 Hắn lúc này đang ngồi trên boong tàu. Mắt nhìn ra biển xa.
 
 "Toa lần này trở về nhà chơi được bao lâu?"
 
 Người hỏi là một người bạn tình cờ gặp.
 
-"Merci beaucoup!"
+"Meci beaucoup!"
 
-Họ cười và tiếp tục câu chuyện.
+"Thank you very much!"
 """, 
             lines=10
         )
@@ -232,7 +327,7 @@ Họ cười và tiếp tục câu chuyện.
             choices=["Short", "Medium", "Long"],
             value="Medium",
             label="⏸️ Pause Duration",
-            info="Controls natural pauses after sentences"
+            info="Controls REAL silence duration between sentences"
         )
     
     btn_synthesize = gr.Button("🔥 Generate Voice", variant="primary", size="lg")
@@ -242,113 +337,70 @@ Họ cười và tiếp tục câu chuyện.
         output_spectrogram = gr.Image(label="📊 Spectrogram")
     
     gr.Markdown("""
-    ### ⚡ Why This Version is FAST:
+    ### 🆕 What's New:
     
-    | Approach | Speed | Quality | Foreign Words |
-    |----------|-------|---------|---------------|
-    | **Code 1 (Multi-pass)** | 🐌 Slow | ✅ Good pauses | ❌ Skips some |
-    | **Code 2 (Single-pass)** | ⚡ Fast | ❌ Poor pauses | ✅ Reads all |
-    | **This Version** | ⚡ **FAST** | ✅ **Good pauses** | ✅ **Reads all** |
+    ✅ **All Sentences Read**: No more skipped short sentences!  
+    ✅ **Foreign Words**: Handles "Merci beaucoup", "Thank you", etc.  
+    ✅ **Smart Merging**: Only merges VERY short phrases (< 3 words)  
+    ✅ **Punctuation Respect**: Never merges sentences with `!` or `?`  
+    ✅ **Fallback System**: Double-check if normalization fails  
     
-    ### 🎯 How It Works:
+    ### 💡 How Smart Pause Works:
     
-    1. **Smart Analysis** (0.1s): Detects paragraphs vs dialogue
-    2. **Pause Injection** (0.1s): Adds dot markers (`.....`) after punctuation
-    3. **Single TTS Pass** (fast!): Processes entire text at once
-    4. **Model Interpretation**: Reads dots as natural pauses
+    | Feature | Description |
+    |---------|-------------|
+    | **Paragraph Detection** | Separates narrative text by double line breaks |
+    | **Dialogue Detection** | Identifies quoted speech (even multi-line) |
+    | **Real Silence** | Actual silent gaps (no fake sounds!) |
+    | **Intelligent Merging** | Only combines extremely short fragments |
+    | **Three Levels** | Short (0.2s/0.1s), Medium (0.4s/0.2s), Long (0.6s/0.3s) |
     
-    ### 💡 Pause Levels:
+    ### 📖 Usage Tips:
+    - **Separate paragraphs** with double line breaks (`\\n\\n`)
+    - **Dialogue** can span multiple lines - just use quotes `"..."`
+    - **Foreign words** are now supported (but pronunciation may vary)
+    - **Short exclamations** like "Wow!" or "Oui!" will be read separately
+    - **Short**: Fast-paced reading (news, announcements)
+    - **Medium**: Natural storytelling (recommended)
+    - **Long**: Dramatic audiobooks, poetry
     
-    - **Short** (2-3 dots): Quick pauses - best for news, announcements
-    - **Medium** (3-5 dots): Natural pauses - recommended for stories
-    - **Long** (5-7 dots): Dramatic pauses - ideal for audiobooks
-    
-    ### 🎯 Example Processing:
-    
-    **Your Input:**
+    ### 🎯 Example Input:
     ```
-    Hắn ngồi trên tàu. Mắt nhìn biển.
+    Hắn ngồi trên boong tàu. Mắt nhìn ra biển.
+    
+    "Toa lần này trở về nhà chơi được bao lâu?"
+    
+    Người hỏi là bạn từ Sài Gòn. 
     
     "Merci beaucoup!"
     
-    Họ tiếp tục nói chuyện.
+    Họ gặp nhau trên đất Pháp.
     ```
     
-    **After Smart Processing (Medium):**
-    ```
-    Hắn ngồi trên tàu. ..... Mắt nhìn biển. .....
+    ✨ **ALL** of these sentences will be read, including "Merci beaucoup!"
     
-    Merci beaucoup! ...
-    
-    Họ tiếp tục nói chuyện. .....
-    ```
-    
-    **Model Output:**
-    - Reads ALL text including "Merci beaucoup!" ✅
-    - Natural pauses at sentence breaks ✅
-    - Fast single-pass processing ⚡
-    
-    ### ✅ Key Advantages:
-    
-    ✨ **No Skipped Sentences**: Every sentence is read, including short ones  
-    ⚡ **Fast Processing**: Single TTS pass = 5-10x faster than multi-pass  
-    🌍 **Foreign Word Support**: Handles mixed Vietnamese + English/French  
-    🎯 **Smart Pause Detection**: Different pauses for narrative vs dialogue  
-    🔄 **Fallback System**: Works even if text normalization fails  
-    
-    ### 📝 Usage Tips:
-    
-    - Use **double line breaks** (`\\n\\n`) to separate major sections
-    - Quote dialogue: `"Hello," she said.`
-    - Mix languages freely: Vietnamese + English + French
-    - Short exclamations like "Wow!" are preserved
-    - Longer texts process much faster than Code 1
-    
-    ### 🔧 Technical Details:
-    
-    **Paragraph vs Dialogue Detection:**
-    - Counts opening/closing quotes to identify dialogue
-    - Applies shorter pauses (3 dots) for dialogue
-    - Applies longer pauses (5 dots) for narrative
-    
-    **Foreign Word Handling:**
-    - Primary: Uses TTSnorm for Vietnamese
-    - Fallback: Uses original text if TTSnorm fails
-    - Result: Both Vietnamese and foreign words are read
-    
-    **Why Dots Instead of Commas:**
-    - Dots (`.....`) = smooth pauses
-    - Commas (`,,,,,`) = weird robotic sounds
+    ### ⚙️ How It Works:
+    1. **Text Splitting**: Breaks text at `.`, `!`, `?` marks
+    2. **Smart Filtering**: Only skips truly empty sentences
+    3. **Minimal Merging**: Only combines fragments < 3 words WITHOUT `!` or `?`
+    4. **Fallback Processing**: If TTSnorm fails, uses original text
+    5. **Audio Assembly**: Concatenates all segments with real silence gaps
     """)
     
     with gr.Accordion("❗ Model Limitations", open=False):
         gr.Markdown("""
-        1. **Numbers & Special Characters**: May not handle dates, phone numbers perfectly
-        2. **Audio Quality**: Use clear reference audio with minimal background noise
-        3. **Reference Text**: Auto-transcribed using Whisper (may have errors)
-        4. **Very Long Text**: Texts over 2000 words may produce inconsistent results
-        5. **Foreign Pronunciation**: Attempts foreign words but may not sound native
-        6. **Pause Precision**: Pause duration depends on model interpretation of dots
+        1. **Numbers & Special Characters**: May not pronounce dates/phone numbers correctly
+        2. **Audio Quality**: Use clear reference audio without background noise
+        3. **Reference Text**: Auto-transcribed with Whisper (may have errors)
+        4. **Processing Time**: Increases with text length (sentence-by-sentence processing)
+        5. **Foreign Words**: Will attempt to pronounce but may not sound native
+        6. **Very Short Sentences**: Now processed but may sound unnatural if standalone
         
-        ### 🆚 When to Use Which Version:
-        
-        **Use This (Single-Pass):**
-        - ✅ Long texts (500+ words)
-        - ✅ Need fast processing
-        - ✅ Text with foreign words
-        - ✅ Production use
-        
-        **Use Code 1 (Multi-Pass):**
-        - ✅ Need exact silence gaps (for scientific use)
-        - ✅ Very short texts (< 100 words)
-        - ✅ Testing different pause timings
-        
-        ### 🔧 Troubleshooting:
-        
-        - **Pauses too short?** → Try "Long" level
-        - **Pauses too long?** → Try "Short" level
-        - **Foreign words mispronounced?** → This is model limitation
-        - **Processing slow?** → Check your text length (this version should be fast!)
+        ### 🔧 Technical Changes:
+        - Removed strict word-count filters (was >= 5 words, now >= 1 word)
+        - Added fallback for TTSnorm failures (helps with foreign text)
+        - Improved merge logic to preserve independent exclamations
+        - Added retry mechanism for failed segments
         """)
 
     # Connect button to function
