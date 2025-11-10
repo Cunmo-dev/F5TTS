@@ -41,13 +41,15 @@ def post_process(text):
     text = text.replace('"', "")
     return " ".join(text.split())
 
-def split_sentences(text):
+def split_sentences(text, max_words=50):
     """
     Tách văn bản thành các câu với xử lý đặc biệt cho hội thoại.
+    Giới hạn mỗi câu không quá max_words từ để tránh quá tải model.
     """
-    # Tách theo xuống dòng trước (để tách hội thoại)
-    lines = text.split('\n')
     sentences = []
+    
+    # Tách theo xuống dòng trước
+    lines = text.split('\n')
     
     for line in lines:
         line = line.strip()
@@ -55,14 +57,58 @@ def split_sentences(text):
             continue
         
         # Nếu là hội thoại (bắt đầu bằng dấu ngoặc kép)
-        if line.startswith('"') or line.startswith('"'):
-            sentences.append(line)
+        if line.startswith('"') or line.startswith('"') or line.startswith('"'):
+            # Chia nhỏ hội thoại dài nếu cần
+            if len(line.split()) > max_words:
+                chunks = split_by_length(line, max_words)
+                sentences.extend(chunks)
+            else:
+                sentences.append(line)
         else:
-            # Tách các câu thường theo dấu câu
+            # Tách theo dấu chấm, chấm than, chấm hỏi trước
             parts = re.split(r'(?<=[.!?])\s+', line)
-            sentences.extend([s.strip() for s in parts if s.strip()])
+            
+            for part in parts:
+                if not part.strip():
+                    continue
+                
+                # Nếu câu quá dài, tách thêm theo dấu phẩy
+                if len(part.split()) > max_words:
+                    sub_parts = re.split(r'(?<=[,;])\s+', part)
+                    for sub in sub_parts:
+                        if sub.strip() and len(sub.strip()) > 5:
+                            # Nếu vẫn còn dài, chia theo số từ
+                            if len(sub.split()) > max_words:
+                                chunks = split_by_length(sub, max_words)
+                                sentences.extend(chunks)
+                            else:
+                                sentences.append(sub.strip())
+                else:
+                    sentences.append(part.strip())
+    
+    # Lọc bỏ các câu quá ngắn (< 5 ký tự)
+    sentences = [s for s in sentences if len(s.strip()) > 5]
     
     return sentences
+
+def split_by_length(text, max_words):
+    """
+    Chia văn bản thành các đoạn nhỏ theo số từ tối đa.
+    """
+    words = text.split()
+    chunks = []
+    current_chunk = []
+    
+    for word in words:
+        current_chunk.append(word)
+        if len(current_chunk) >= max_words:
+            chunks.append(' '.join(current_chunk))
+            current_chunk = []
+    
+    if current_chunk:
+        chunks.append(' '.join(current_chunk))
+    
+    return chunks
 
 def add_silence(audio_array, sample_rate, duration_ms=500):
     """
@@ -106,8 +152,13 @@ def infer_tts(ref_audio_orig: str, gen_text: str, speed: float = 1.0,
         # Preprocess reference audio
         ref_audio, ref_text = preprocess_ref_audio_text(ref_audio_orig, "")
         
-        # Tách văn bản thành các câu
-        sentences = split_sentences(gen_text)
+        # Tách văn bản thành các câu (giới hạn 50 từ/câu để tránh quá tải)
+        sentences = split_sentences(gen_text, max_words=50)
+        
+        print(f"\n=== DETECTED {len(sentences)} SENTENCES ===")
+        for i, sent in enumerate(sentences):
+            print(f"Sentence {i+1}: {sent[:80]}...")
+        print("=" * 50)
         
         if len(sentences) == 0:
             raise gr.Error("No valid sentences found in the text.")
@@ -122,31 +173,42 @@ def infer_tts(ref_audio_orig: str, gen_text: str, speed: float = 1.0,
             if not sentence.strip():
                 continue
             
-            # Chuẩn hóa và xử lý câu
-            processed_sentence = post_process(TTSnorm(sentence)).lower()
-            
-            # Tạo audio cho câu
-            wave, sr, spectrogram = infer_process(
-                ref_audio, 
-                ref_text.lower(), 
-                processed_sentence, 
-                model, 
-                vocoder, 
-                speed=speed
-            )
-            
-            if sample_rate is None:
-                sample_rate = sr
-            
-            # Thêm khoảng lặng phù hợp
-            if i < len(sentences) - 1:
-                # Hội thoại: pause ngắn hơn
-                # Đoạn văn tả: pause dài hơn
-                pause = pause_dialogue if is_dialogue(sentence) else pause_paragraph
-                wave = add_silence(wave, sr, pause)
-            
-            audio_segments.append(wave)
-            all_spectrograms.append(spectrogram)
+            try:
+                # Chuẩn hóa và xử lý câu
+                processed_sentence = post_process(TTSnorm(sentence)).lower()
+                
+                print(f"Processing {i+1}/{len(sentences)}: {processed_sentence[:60]}...")
+                
+                # Tạo audio cho câu
+                wave, sr, spectrogram = infer_process(
+                    ref_audio, 
+                    ref_text.lower(), 
+                    processed_sentence, 
+                    model, 
+                    vocoder, 
+                    speed=speed
+                )
+                
+                if sample_rate is None:
+                    sample_rate = sr
+                
+                # Thêm khoảng lặng phù hợp
+                if i < len(sentences) - 1:
+                    # Hội thoại: pause ngắn hơn
+                    # Đoạn văn tả: pause dài hơn
+                    pause = pause_dialogue if is_dialogue(sentence) else pause_paragraph
+                    wave = add_silence(wave, sr, pause)
+                
+                audio_segments.append(wave)
+                all_spectrograms.append(spectrogram)
+                
+            except Exception as e:
+                print(f"Warning: Failed to process sentence {i+1}: {e}")
+                # Tiếp tục với câu tiếp theo thay vì dừng hẳn
+                continue
+        
+        if len(audio_segments) == 0:
+            raise gr.Error("Failed to generate any audio segments.")
         
         # Ghép tất cả audio lại
         final_wave = np.concatenate(audio_segments)
@@ -201,6 +263,7 @@ with gr.Blocks(theme=gr.themes.Soft()) as demo:
     - System automatically detects dialogue (text in quotes) vs narration
     - For natural conversation flow, use 300-500ms for dialogue
     - For dramatic reading, increase paragraph pause to 1000-1500ms
+    - **NEW**: Now splits sentences by commas (,) and semicolons (;) in addition to periods (.)
     """)
     
     model_limitations = gr.Textbox(
