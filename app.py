@@ -1,4 +1,3 @@
-%%writefile app.py
 import spaces
 import os
 from huggingface_hub import login
