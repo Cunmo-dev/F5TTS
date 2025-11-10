@@ -70,16 +70,16 @@ def split_text_into_sentences(text, pause_paragraph_duration=0.8, pause_dialogue
                 current_sentence += part
                 sentence_text = current_sentence.strip()
                 
-                # Chỉ thêm nếu câu có ít nhất 3 từ
-                if sentence_text and len(sentence_text.split()) >= 3:
+                # Chỉ thêm nếu câu có ít nhất 2 từ (giảm từ 3 xuống 2)
+                if sentence_text and len(sentence_text.split()) >= 1:
                     chunks.append((sentence_text, pause_duration))
                     current_sentence = ""
                 elif sentence_text:
                     # Câu ngắn, giữ để gộp với câu sau
                     current_sentence += " "
         
-        # Thêm phần còn lại nếu có
-        if current_sentence.strip() and len(current_sentence.strip().split()) >= 3:
+        # Thêm phần còn lại nếu có (tối thiểu 2 từ)
+        if current_sentence.strip() and len(current_sentence.strip().split()) >= 2:
             chunks.append((current_sentence.strip(), pause_duration))
     
     # Gộp các câu quá ngắn
@@ -87,8 +87,9 @@ def split_text_into_sentences(text, pause_paragraph_duration=0.8, pause_dialogue
     temp_sentence = ""
     temp_pause = pause_paragraph_duration
     
-    for sentence, pause in chunks:
+    for i, (sentence, pause) in enumerate(chunks):
         word_count = len(sentence.split())
+        is_last = (i == len(chunks) - 1)
         
         if word_count >= 5:
             # Câu đủ dài
@@ -105,12 +106,14 @@ def split_text_into_sentences(text, pause_paragraph_duration=0.8, pause_dialogue
                 temp_sentence = sentence
                 temp_pause = pause
             
-            # Nếu đã đủ 5 từ thì xuất
-            if len(temp_sentence.split()) >= 5:
+            # Xuất nếu: đã đủ 5 từ HOẶC là câu cuối và có ít nhất 2 từ
+            should_output = (len(temp_sentence.split()) >= 5) or (is_last and len(temp_sentence.split()) >= 2)
+            
+            if should_output:
                 merged_chunks.append((temp_sentence, temp_pause))
                 temp_sentence = ""
     
-    # Thêm phần cuối nếu còn (tối thiểu 2 từ)
+    # Thêm phần cuối nếu còn sót (tối thiểu 2 từ)
     if temp_sentence and len(temp_sentence.split()) >= 2:
         merged_chunks.append((temp_sentence, temp_pause))
     
@@ -156,9 +159,9 @@ def infer_tts(ref_audio_orig: str, gen_text: str, speed: float = 1.0,
     try:
         # Cấu hình pause (giây)
         pause_configs = {
-            "Short": (0.2, 0.1),    # Paragraph: 0.4s, Dialogue: 0.2s
-            "Medium": (0.4, 0.2),   # Paragraph: 0.8s, Dialogue: 0.4s
-            "Long": (0.6, 0.3)      # Paragraph: 1.2s, Dialogue: 0.6s
+            "Short": (0.4, 0.2),    # Paragraph: 0.4s, Dialogue: 0.2s
+            "Medium": (0.8, 0.4),   # Paragraph: 0.8s, Dialogue: 0.4s
+            "Long": (1.2, 0.6)      # Paragraph: 1.2s, Dialogue: 0.6s
         }
         
         pause_paragraph, pause_dialogue = pause_configs.get(pause_level, (0.8, 0.4))
