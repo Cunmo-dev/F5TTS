@@ -28,11 +28,11 @@ if hf_token:
 
 def split_text_into_sentences(text, pause_paragraph_duration=0.8, pause_dialogue_duration=0.4):
     """
-    Tách văn bản thành các câu, xử lý đúng hội thoại nhiều dòng.
+    Tách văn bản thành các câu, chỉ ghép câu < 2 từ bằng dấu chấm.
     
     Returns:
         list of tuples: [(sentence, pause_duration_in_seconds, is_merged), ...]
-        - is_merged: True nếu là câu gộp (đã có dấu phẩy nội tại)
+        - is_merged: True nếu là câu gộp (đã có dấu chấm nội tại)
     """
     chunks = []
     
@@ -79,7 +79,7 @@ def split_text_into_sentences(text, pause_paragraph_duration=0.8, pause_dialogue
         if current_sentence.strip():
             chunks.append((current_sentence.strip(), pause_duration, False))
     
-    # Gộp các câu quá ngắn bằng dấu phẩy
+    # Gộp các câu < 2 từ bằng dấu chấm
     merged_chunks = []
     temp_sentences = []  # Danh sách các câu tích lũy
     temp_pause = pause_paragraph_duration
@@ -88,62 +88,52 @@ def split_text_into_sentences(text, pause_paragraph_duration=0.8, pause_dialogue
         word_count = len(sentence.split())
         is_last = (i == len(chunks) - 1)
         
-        if word_count >= 5:
+        if word_count >= 2:  # ĐỔI: Chỉ ghép câu < 2 từ (thay vì < 5 từ)
             # Câu đủ dài
             if temp_sentences:
-                # Gộp các câu tích lũy + câu hiện tại bằng dấu phẩy
+                # Gộp các câu tích lũy + câu hiện tại bằng dấu chấm
                 all_sentences = temp_sentences + [sentence]
-                merged_text = ", ".join(all_sentences)
-                # Đánh dấu là câu gộp (model sẽ tự tạo pause ở dấu phẩy)
+                merged_text = ". ".join(all_sentences)  # ĐỔI: Dùng dấu chấm thay vì phẩy
+                # Đánh dấu là câu gộp
                 merged_chunks.append((merged_text, pause, True))
                 temp_sentences = []
             else:
                 # Câu độc lập
                 merged_chunks.append((sentence, pause, False))
         else:
-            # Câu ngắn, tích lũy
+            # Câu ngắn (< 2 từ), tích lũy
             temp_sentences.append(sentence)
             temp_pause = pause
             
-            # Xuất nếu: đủ 5 từ tổng
-            total_words = sum(len(s.split()) for s in temp_sentences)
-            should_output_now = total_words >= 5
-            
-            # Nếu là câu cuối và chưa đủ 5 từ -> cố gắng merge với câu trước
-            if is_last and not should_output_now:
+            # Nếu là câu cuối -> gộp với câu trước
+            if is_last:
                 if merged_chunks:
-                    # Gộp vào câu trước bằng dấu phẩy
+                    # Gộp vào câu trước bằng dấu chấm
                     last_sentence, last_pause, last_merged = merged_chunks[-1]
-                    combined_text = last_sentence + ", " + ", ".join(temp_sentences)
+                    combined_text = last_sentence + ". " + ". ".join(temp_sentences)  # ĐỔI: Dấu chấm
                     merged_chunks[-1] = (combined_text, last_pause, True)
-                    print(f"   🔗 Merged last short chunk(s) with comma")
+                    print(f"   🔗 Merged last short chunk(s) with period")
                     temp_sentences = []
                 else:
                     # Không có câu trước -> thêm padding
-                    merged_text = ", ".join(temp_sentences)
+                    merged_text = ". ".join(temp_sentences)
                     while len(merged_text.split()) < 3:
                         merged_text += " này"
                     print(f"   ⚠️ Last chunk too short, padded: '{merged_text}'")
                     merged_chunks.append((merged_text, temp_pause, False))
                     temp_sentences = []
-            elif should_output_now:
-                merged_text = ", ".join(temp_sentences)
-                # Đánh dấu là câu gộp nếu có >= 2 câu
-                is_merged = len(temp_sentences) >= 2
-                merged_chunks.append((merged_text, temp_pause, is_merged))
-                temp_sentences = []
     
     # Xử lý câu còn sót
     if temp_sentences:
         if merged_chunks:
-            # Gộp vào câu trước bằng dấu phẩy
+            # Gộp vào câu trước bằng dấu chấm
             last_sentence, last_pause, last_merged = merged_chunks[-1]
-            combined_text = last_sentence + ", " + ", ".join(temp_sentences)
+            combined_text = last_sentence + ". " + ". ".join(temp_sentences)  # ĐỔI: Dấu chấm
             merged_chunks[-1] = (combined_text, last_pause, True)
-            print(f"   🔗 Merged remaining short chunks with comma")
+            print(f"   🔗 Merged remaining short chunks with period")
         else:
             # Trường hợp đặc biệt: chỉ có câu ngắn
-            merged_text = ", ".join(temp_sentences)
+            merged_text = ". ".join(temp_sentences)
             while len(merged_text.split()) < 3:
                 merged_text += " này"
             print(f"   ⚠️ Only short sentence(s) found, padded: '{merged_text}'")
@@ -259,7 +249,7 @@ def infer_tts(ref_audio_orig: str, gen_text: str, speed: float = 1.0,
             
             print(f"   📝 Normalized ({word_count} words): {normalized_text[:80]}...")
             if is_merged:
-                print(f"   ℹ️ Merged sentence - model will create natural pauses at commas")
+                print(f"   ℹ️ Merged sentence - model will create natural pauses at periods")
             
             # Retry logic với backoff
             max_retries = 2
@@ -292,7 +282,7 @@ def infer_tts(ref_audio_orig: str, gen_text: str, speed: float = 1.0,
                         audio_segments.append(silence)
                         print(f"   ⏸️  Added {pause_duration}s silence between chunks")
                     elif i < len(chunks) - 1 and is_merged:
-                        print(f"   🔇 No manual silence (merged sentence with commas)")
+                        print(f"   🔇 No manual silence (merged sentence with periods)")
                         
                 except Exception as e:
                     retry_count += 1
@@ -405,55 +395,45 @@ Người hỏi là một người bạn tình cờ gặp.""",
         output_spectrogram = gr.Image(label="📊 Spectrogram")
     
     gr.Markdown("""
-    ### 💡 How Smart Pause Works:
+    ### 💡 How Smart Pause Works (Modified):
     
     | Feature | Description |
     |---------|-------------|
     | **Paragraph Detection** | Separates narrative text by double line breaks |
     | **Dialogue Detection** | Identifies quoted speech (even multi-line) |
-    | **Smart Comma Merging** | Short sentences combined with commas for natural flow |
-    | **Model-Based Pauses** | AI naturally pauses at commas (smoother than cutting audio) |
-    | **Three Levels** | Short (0.4s/0.2s), Medium (0.8s/0.4s), Long (1.2s/0.6s) |
+    | **Smart Period Merging** | Only sentences < 2 words are merged with periods |
+    | **Model-Based Pauses** | AI naturally pauses at periods |
+    | **Three Levels** | Short (0.2s/0.1s), Medium (0.4s/0.2s), Long (0.6s/0.3s) |
     
     ### 📖 Usage Tips:
     - **Separate paragraphs** with double line breaks (`\n\n`)
     - **Dialogue** can span multiple lines - just use quotes `"..."`
-    - **Short sentences** are merged with commas (e.g., "À! Còn quýt?" → "À, Còn quýt?")
-    - **Natural prosody**: Model creates smooth pauses at commas, not choppy cuts
-    - **Short**: Fast-paced reading (news, announcements)
+    - **Only very short sentences** (< 2 words) are merged with periods
+    - **Natural prosody**: Model creates pauses at periods
+    - **Short**: Fast-paced reading
     - **Medium**: Natural storytelling (recommended)
-    - **Long**: Dramatic audiobooks, poetry
+    - **Long**: Dramatic audiobooks
     
-    ### 🎯 Example Input & Processing:
+    ### 🎯 Example Processing:
     ```
     Input:
     "Nhà chồng em!"
     "À!"
-    "Còn quýt?"
     
-    → Processing:
-    Merged with commas: "Nhà chồng em, À, Còn quýt?"
-    Model generates audio with natural pauses at commas
+    → "À!" has only 1 word (< 2), so it gets merged:
+    "Nhà chồng em. À!"
     
-    Result: Smooth, natural-sounding speech!
-    ```
+    But:
+    "Nhà chồng em!"
+    "Còn quýt nữa?"
     
-    ### 🎯 Example Input:
-    ```
-    Hắn ngồi trên boong tàu. Mắt nhìn ra biển.
-    
-    "Toa lần này trở về nhà chơi được bao lâu?"
-    
-    Người hỏi là bạn từ Sài Gòn. Họ gặp nhau trên đất Pháp.
-    
-    "Merci beaucoup!"
+    → Both sentences have ≥ 2 words, so they stay separate
     ```
     
     ### ⚠️ Note:
     - Each sentence is processed separately, then combined with real silence
+    - Only sentences with less than 2 words are merged using periods
     - Longer texts take more time but produce better pause quality
-    - Multi-line dialogue is automatically detected and merged
-    - Short phrases (like "Merci!") are automatically merged with nearby sentences
     """)
     
     with gr.Accordion("❗ Model Limitations", open=False):
@@ -462,8 +442,8 @@ Người hỏi là một người bạn tình cờ gặp.""",
         2. **Audio Quality**: Use clear reference audio without background noise
         3. **Reference Text**: Auto-transcribed with Whisper (may have errors)
         4. **Processing Time**: Increases with text length (sentence-by-sentence processing)
-        5. **Foreign Words**: Pronounced phonetically in Vietnamese (e.g., "Merci" → "Mét-xi")
-        6. **Very Short Sentences**: Automatically merged with nearby sentences
+        5. **Foreign Words**: Pronounced phonetically in Vietnamese
+        6. **Very Short Sentences**: Only sentences < 2 words are merged
         7. **Error Recovery**: If one sentence fails, processing continues with remaining text
         """)
 
