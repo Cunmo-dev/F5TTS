@@ -88,7 +88,7 @@ def split_text_into_sentences(text, pause_paragraph_duration=0.8, pause_dialogue
         word_count = len(sentence.split())
         is_last = (i == len(chunks) - 1)
         
-        if word_count >= 2:  # ĐỔI: Chỉ ghép câu < 2 từ (thay vì < 5 từ)
+        if word_count >= 3:  # ĐỔI: Chỉ ghép câu < 2 từ (thay vì < 5 từ)
             # Câu đủ dài
             if temp_sentences:
                 # Gộp các câu tích lũy + câu hiện tại bằng dấu chấm
