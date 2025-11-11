@@ -94,8 +94,9 @@ def split_text_into_sentences(text, pause_paragraph_duration=0.8, pause_dialogue
                 # Gộp các câu tích lũy + câu hiện tại
                 all_sentences = temp_sentences + [sentence]
                 merged_text = " ".join(all_sentences)
-                # Lưu thông tin các câu con để thêm silence sau
-                merged_chunks.append((merged_text, pause, all_sentences))
+                # Lưu thông tin các câu con để thêm silence sau (chỉ khi có >= 2 câu)
+                sub_info = all_sentences if len(all_sentences) >= 2 else None
+                merged_chunks.append((merged_text, pause, sub_info))
                 temp_sentences = []
             else:
                 # Câu độc lập
@@ -105,36 +106,64 @@ def split_text_into_sentences(text, pause_paragraph_duration=0.8, pause_dialogue
             temp_sentences.append(sentence)
             temp_pause = pause
             
-            # Xuất nếu: đủ 5 từ tổng, hoặc là câu cuối
+            # Xuất nếu: đủ 5 từ tổng
             total_words = sum(len(s.split()) for s in temp_sentences)
-            should_output = total_words >= 5 or is_last
+            should_output_now = total_words >= 5
             
-            if should_output:
+            # Nếu là câu cuối và chưa đủ 5 từ -> cố gắng merge với câu trước
+            if is_last and not should_output_now:
+                if merged_chunks:
+                    # Gộp vào câu trước
+                    last_sentence, last_pause, last_subs = merged_chunks[-1]
+                    if last_subs:
+                        # Câu trước cũng là câu gộp
+                        combined_subs = last_subs + temp_sentences
+                        merged_text = " ".join(combined_subs)
+                        merged_chunks[-1] = (merged_text, last_pause, combined_subs)
+                    else:
+                        # Câu trước là câu đơn
+                        combined_subs = [last_sentence] + temp_sentences
+                        merged_text = " ".join(combined_subs)
+                        merged_chunks[-1] = (merged_text, last_pause, combined_subs)
+                    print(f"   🔗 Merged last short chunk(s) into previous sentence")
+                    temp_sentences = []  # Đã xử lý xong
+                else:
+                    # Không có câu trước -> thêm padding
+                    merged_text = " ".join(temp_sentences)
+                    # Pad để đủ dài
+                    while len(merged_text.split()) < 3:
+                        merged_text += " này"
+                    print(f"   ⚠️ Last chunk too short, padded: '{merged_text}'")
+                    merged_chunks.append((merged_text, temp_pause, None))
+                    temp_sentences = []
+            elif should_output_now:
                 merged_text = " ".join(temp_sentences)
-                # Lưu các câu con
-                merged_chunks.append((merged_text, temp_pause, temp_sentences.copy()))
+                # Chỉ lưu sub_sentences nếu có >= 2 câu
+                sub_info = temp_sentences.copy() if len(temp_sentences) >= 2 else None
+                merged_chunks.append((merged_text, temp_pause, sub_info))
                 temp_sentences = []
     
-    # Xử lý câu cuối nếu còn sót
+    # Xử lý câu còn sót (không phải câu cuối trong loop)
     if temp_sentences:
         if merged_chunks:
             # Gộp vào câu trước
             last_sentence, last_pause, last_subs = merged_chunks[-1]
             if last_subs:
-                # Câu trước cũng là câu gộp
                 combined_subs = last_subs + temp_sentences
                 merged_text = " ".join(combined_subs)
                 merged_chunks[-1] = (merged_text, last_pause, combined_subs)
             else:
-                # Câu trước là câu đơn
                 combined_subs = [last_sentence] + temp_sentences
                 merged_text = " ".join(combined_subs)
                 merged_chunks[-1] = (merged_text, last_pause, combined_subs)
-            print(f"   🔗 Merged last short chunks into previous sentence")
+            print(f"   🔗 Merged remaining short chunks into previous sentence")
         else:
-            # Không có câu nào, buộc phải xuất
+            # Trường hợp đặc biệt: chỉ có 1 câu ngắn trong toàn bộ văn bản
             merged_text = " ".join(temp_sentences)
-            merged_chunks.append((merged_text, temp_pause, temp_sentences.copy()))
+            while len(merged_text.split()) < 3:
+                merged_text += " này"
+            print(f"   ⚠️ Only short sentence(s) found, padded: '{merged_text}'")
+            merged_chunks.append((merged_text, temp_pause, None))
     
     return merged_chunks
 
@@ -291,11 +320,12 @@ def infer_tts(ref_audio_orig: str, gen_text: str, speed: float = 1.0,
             normalized_text = validate_text_for_tts(normalized_text)
             
             # Kiểm tra độ dài tối thiểu
-            if len(normalized_text.strip()) < 3:
-                print(f"   ⏭️ Skipped (too short): '{normalized_text}'")
+            word_count = len(normalized_text.strip().split())
+            if word_count < 2:
+                print(f"   ⏭️ Skipped (too short: {word_count} words): '{normalized_text}'")
                 continue
             
-            print(f"   📝 Normalized: {normalized_text[:80]}...")
+            print(f"   📝 Normalized ({word_count} words): {normalized_text[:80]}...")
             if sub_sentences:
                 print(f"   🔗 Merged from {len(sub_sentences)} short sentences")
             
