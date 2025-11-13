@@ -26,82 +26,42 @@ hf_token = os.getenv("HUGGINGFACEHUB_API_TOKEN")
 if hf_token:
     login(token=hf_token)
 
-def detect_repeated_pattern(text):
+def is_repetitive_text(text):
     """
-    Phát hiện pattern lặp lại như "Há há há", "A a a", "hehe he he"
-    Returns: (is_repeated, cleaned_text)
+    Kiểm tra xem văn bản có phải là lặp lại không (há há há, hahaha, A!!!!, etc.)
     """
-    text_clean = text.strip()
-    words = text_clean.split()
+    # Loại bỏ khoảng trắng và ký tự đặc biệt để kiểm tra
+    clean = re.sub(r'[^\w]', '', text.lower())
     
-    # Nếu có 2 từ trở lên
+    # Nếu quá ngắn, không coi là lặp
+    if len(clean) < 2:
+        return False
+    
+    # Kiểm tra pattern lặp: "hahaha", "hihihi"
+    if len(set(clean)) <= 2 and len(clean) >= 4:
+        return True
+    
+    # Kiểm tra từ lặp với khoảng trắng: "há há há"
+    words = text.lower().split()
     if len(words) >= 2:
-        # Loại bỏ dấu câu để so sánh
-        words_normalized = [re.sub(r'[^\w]', '', w.lower()) for w in words]
-        
-        # Kiểm tra nếu tất cả từ giống nhau (hoặc rất giống nhau)
-        unique_words = set(words_normalized)
-        
-        # Pattern lặp: tất cả từ giống nhau hoặc chỉ có 1-2 từ unique
-        if len(unique_words) <= 2 and len(words) >= 2:
-            # Kiểm tra xem có phải lặp hoàn toàn không
-            first_word = words_normalized[0]
-            if all(w == first_word or w == '' for w in words_normalized):
-                # Lặp hoàn toàn: "há há há" -> giữ lại 1 lần
-                return True, words[0]
-            
-            # Kiểm tra lặp xen kẽ: "há há hả" (2 từ giống nhau trở lên)
-            if len([w for w in words_normalized if w == first_word]) >= len(words) * 0.6:
-                return True, words[0]
+        # Nếu tất cả các từ giống nhau
+        if len(set(words)) == 1:
+            return True
+        # Nếu có ít nhất 3 từ và 80% giống nhau
+        if len(words) >= 3:
+            most_common = max(set(words), key=words.count)
+            if words.count(most_common) / len(words) >= 0.8:
+                return True
     
-    return False, text_clean
-
-def merge_repeated_with_context(chunks):
-    """
-    Gộp các chunk có pattern lặp vào câu bên cạnh, hoặc bỏ qua nếu không thể gộp.
-    """
-    merged = []
-    i = 0
-    
-    while i < len(chunks):
-        sentence, pause, is_merged = chunks[i]
-        is_repeated, cleaned = detect_repeated_pattern(sentence)
-        
-        if is_repeated:
-            print(f"   🔁 Detected repeated pattern: '{sentence}' -> '{cleaned}'")
-            
-            # Thử gộp với câu trước
-            if merged:
-                prev_sentence, prev_pause, prev_merged = merged[-1]
-                # Gộp vào câu trước với dấu phẩy
-                merged[-1] = (f"{prev_sentence}, {cleaned}", prev_pause, True)
-                print(f"   ✅ Merged with previous: '{prev_sentence}' + '{cleaned}'")
-            
-            # Nếu không có câu trước, thử gộp với câu sau
-            elif i + 1 < len(chunks):
-                next_sentence, next_pause, next_merged = chunks[i + 1]
-                # Gộp vào câu sau
-                merged.append((f"{cleaned}, {next_sentence}", next_pause, True))
-                print(f"   ✅ Merged with next: '{cleaned}' + '{next_sentence}'")
-                i += 1  # Skip câu sau vì đã gộp
-            
-            # Nếu không gộp được, bỏ qua chunk này
-            else:
-                print(f"   ⏭️ Skipped standalone repeated pattern: '{sentence}'")
-        else:
-            # Câu bình thường, thêm vào
-            merged.append((sentence, pause, is_merged))
-        
-        i += 1
-    
-    return merged
+    return False
 
 def split_text_into_sentences(text, pause_paragraph_duration=0.8, pause_dialogue_duration=0.4):
     """
-    Tách văn bản thành các câu, xử lý pattern lặp lại.
+    Tách văn bản thành các câu, chỉ ghép câu < 3 từ hoặc câu lặp lại bằng dấu chấm.
     
     Returns:
         list of tuples: [(sentence, pause_duration_in_seconds, is_merged), ...]
+        - is_merged: True nếu là câu gộp (đã có dấu chấm nội tại)
     """
     chunks = []
     
@@ -148,40 +108,51 @@ def split_text_into_sentences(text, pause_paragraph_duration=0.8, pause_dialogue
         if current_sentence.strip():
             chunks.append((current_sentence.strip(), pause_duration, False))
     
-    # XỬ LÝ PATTERN LẶP LẠI TRƯỚC KHI GỘP CÂU NGẮN
-    chunks = merge_repeated_with_context(chunks)
-    
-    # Gộp các câu < 2 từ bằng dấu chấm (logic cũ)
+    # Gộp các câu < 3 từ HOẶC câu lặp lại bằng dấu chấm
     merged_chunks = []
-    temp_sentences = []
+    temp_sentences = []  # Danh sách các câu tích lũy
     temp_pause = pause_paragraph_duration
     
-    for i, (sentence, pause, is_merged_flag) in enumerate(chunks):
+    for i, (sentence, pause, _) in enumerate(chunks):
         word_count = len(sentence.split())
         is_last = (i == len(chunks) - 1)
+        is_repetitive = is_repetitive_text(sentence)
         
-        if word_count >= 3:
-            # Câu đủ dài
+        # Kiểm tra điều kiện ghép: < 3 từ HOẶC là câu lặp
+        should_merge = word_count < 3 or is_repetitive
+        
+        if not should_merge:
+            # Câu đủ dài và không lặp
             if temp_sentences:
+                # Gộp các câu tích lũy + câu hiện tại bằng dấu chấm
                 all_sentences = temp_sentences + [sentence]
                 merged_text = ". ".join(all_sentences)
                 merged_chunks.append((merged_text, pause, True))
                 temp_sentences = []
+                if is_repetitive:
+                    print(f"   🔗 Merged repetitive text: '{sentence[:50]}...'")
             else:
-                merged_chunks.append((sentence, pause, is_merged_flag))
+                # Câu độc lập
+                merged_chunks.append((sentence, pause, False))
         else:
-            # Câu ngắn (< 3 từ), tích lũy
+            # Câu ngắn (< 3 từ) HOẶC câu lặp, tích lũy
             temp_sentences.append(sentence)
             temp_pause = pause
             
+            if is_repetitive:
+                print(f"   ⚠️ Detected repetitive text: '{sentence}', will merge with adjacent sentence")
+            
+            # Nếu là câu cuối -> gộp với câu trước
             if is_last:
                 if merged_chunks:
+                    # Gộp vào câu trước bằng dấu chấm
                     last_sentence, last_pause, last_merged = merged_chunks[-1]
                     combined_text = last_sentence + ". " + ". ".join(temp_sentences)
                     merged_chunks[-1] = (combined_text, last_pause, True)
-                    print(f"   🔗 Merged last short chunk(s) with period")
+                    print(f"   🔗 Merged last short/repetitive chunk(s) with period")
                     temp_sentences = []
                 else:
+                    # Không có câu trước -> thêm padding
                     merged_text = ". ".join(temp_sentences)
                     while len(merged_text.split()) < 3:
                         merged_text += " này"
@@ -192,15 +163,17 @@ def split_text_into_sentences(text, pause_paragraph_duration=0.8, pause_dialogue
     # Xử lý câu còn sót
     if temp_sentences:
         if merged_chunks:
+            # Gộp vào câu trước bằng dấu chấm
             last_sentence, last_pause, last_merged = merged_chunks[-1]
             combined_text = last_sentence + ". " + ". ".join(temp_sentences)
             merged_chunks[-1] = (combined_text, last_pause, True)
-            print(f"   🔗 Merged remaining short chunks with period")
+            print(f"   🔗 Merged remaining short/repetitive chunks with period")
         else:
+            # Trường hợp đặc biệt: chỉ có câu ngắn
             merged_text = ". ".join(temp_sentences)
             while len(merged_text.split()) < 3:
                 merged_text += " này"
-            print(f"   ⚠️ Only short sentence(s) found, padded: '{merged_text}'")
+            print(f"   ⚠️ Only short/repetitive sentence(s) found, padded: '{merged_text}'")
             merged_chunks.append((merged_text, temp_pause, False))
     
     return merged_chunks
@@ -211,14 +184,15 @@ def create_silence(duration_seconds, sample_rate=24000):
     return np.zeros(num_samples, dtype=np.float32)
 
 def post_process(text):
-    """Làm sạch văn bản, xử lý dấu chấm liên tiếp."""
+    """Làm sạch văn bản, loại bỏ ký tự đặc biệt (giữ lại dấu chấm)."""
     text = " " + text + " "
     
-    # Xử lý dấu chấm liên tiếp (... -> .)
-    text = re.sub(r'\.{2,}', '.', text)
-    
+    # Loại bỏ dấu chấm lặp
     text = text.replace(" . . ", " . ")
     text = text.replace(" .. ", " . ")
+    text = re.sub(r'\.{2,}', '.', text)  # Thay ... thành .
+    
+    # Loại bỏ dấu ngoặc kép
     text = text.replace('"', "")
     text = text.replace('"', "")
     text = text.replace('"', "")
@@ -226,10 +200,11 @@ def post_process(text):
     # Loại bỏ dấu phẩy dư thừa
     text = re.sub(r',+', ',', text)
     
-    # Loại bỏ dấu chấm than/hỏi liên tiếp quá nhiều (!!! -> !)
-    text = re.sub(r'!{2,}', '!', text)
-    text = re.sub(r'\?{2,}', '?', text)
+    # Loại bỏ các ký tự đặc biệt NGOẠI TRỪ dấu chấm và chữ cái/số
+    # Giữ lại: chữ cái, số, khoảng trắng, dấu chấm
+    text = re.sub(r'[^\w\s.]', '', text, flags=re.UNICODE)
     
+    # Loại bỏ khoảng trắng thừa
     return " ".join(text.split())
 
 def safe_normalize(text):
@@ -248,12 +223,6 @@ def validate_text_for_tts(text):
     """Kiểm tra văn bản trước khi đưa vào TTS."""
     # Loại bỏ khoảng trắng thừa
     text = ' '.join(text.split())
-    
-    # Kiểm tra pattern lặp còn sót
-    is_repeated, cleaned = detect_repeated_pattern(text)
-    if is_repeated:
-        print(f"   🔄 Found repeated pattern in validation: '{text}' -> using '{cleaned}'")
-        text = cleaned
     
     # Chỉ cảnh báo nếu quá ngắn
     words = text.split()
@@ -329,7 +298,7 @@ def infer_tts(ref_audio_orig: str, gen_text: str, speed: float = 1.0,
             
             print(f"   📝 Normalized ({word_count} words): {normalized_text[:80]}...")
             if is_merged:
-                print(f"   ℹ️ Merged sentence - model will create natural pauses")
+                print(f"   ℹ️ Merged sentence - model will create natural pauses at periods")
             
             # Retry logic với backoff
             max_retries = 2
@@ -355,13 +324,14 @@ def infer_tts(ref_audio_orig: str, gen_text: str, speed: float = 1.0,
                     print(f"   ✅ Generated {len(wave)/sr:.2f}s audio")
                     success = True
                     
-                    # Thêm khoảng im lặng giữa các chunk
+                    # Thêm khoảng im lặng giữa các chunk chính (không phải câu cuối)
+                    # Nếu là câu gộp, không thêm silence vì model đã xử lý
                     if i < len(chunks) - 1 and not is_merged:
                         silence = create_silence(pause_duration, sample_rate)
                         audio_segments.append(silence)
-                        print(f"   ⏸️  Added {pause_duration}s silence")
+                        print(f"   ⏸️  Added {pause_duration}s silence between chunks")
                     elif i < len(chunks) - 1 and is_merged:
-                        print(f"   🔇 No manual silence (merged sentence)")
+                        print(f"   🔇 No manual silence (merged sentence with periods)")
                         
                 except Exception as e:
                     retry_count += 1
@@ -429,25 +399,26 @@ def infer_tts(ref_audio_orig: str, gen_text: str, speed: float = 1.0,
 # Gradio UI
 with gr.Blocks(theme=gr.themes.Soft()) as demo:
     gr.Markdown("""
-    # 🎤 F5-TTS: Vietnamese Text-to-Speech Synthesis (Fixed)
+    # 🎤 F5-TTS: Vietnamese Text-to-Speech Synthesis
     ### Model trained with ~1000 hours of data on RTX 3090 GPU
     
-    ✨ **New**: Automatically handles repeated words like "Há há há", "A a a"
+    Enter text and upload a sample voice to generate natural speech with **real silence pauses**.
+    
+    ✨ **Smart Pause Feature**: Automatically adds REAL silent pauses between sentences!
     """)
     
     with gr.Row():
         ref_audio = gr.Audio(label="🔊 Sample Voice", type="filepath")
         gen_text = gr.Textbox(
             label="📝 Text to Generate", 
-            placeholder="""Test repeated words:
+            placeholder="""Enter text with paragraphs and dialogue...
 
-Chớp mắt một cái bỗng dưng không còn nhìn thấy bé Tư đâu nữa. Trong bóng đêm dày đặc chỉ nghe thấy tiếng cười quỷ dị của y. 
+Example:
+Hắn lúc này đang ngồi trên boong tàu. Mắt nhìn ra biển xa.
 
-"Há há há..."
+"Toa lần này trở về nhà chơi được bao lâu?"
 
-Minh Huy căng mắt nhìn ra xung quanh. Mồ hôi trên trán rơi xuống mi mắt hắn một mảng cay xè. 
-
-"A!!!!!!!" """, 
+Người hỏi là một người bạn tình cờ gặp.""", 
             lines=10
         )
     
@@ -473,40 +444,69 @@ Minh Huy căng mắt nhìn ra xung quanh. Mồ hôi trên trán rơi xuống mi 
         output_spectrogram = gr.Image(label="📊 Spectrogram")
     
     gr.Markdown("""
-    ### 🆕 Repeated Word Handling:
+    ### 💡 How Smart Pause Works (Modified):
     
-    | Input | Output | Action |
-    |-------|--------|--------|
-    | `"Há há há..."` | `"Há"` merged with adjacent sentence | ✅ Fixed |
-    | `"A a a!!!"` | `"A"` merged with next sentence | ✅ Fixed |
-    | `"He he he"` | `"He"` merged with previous sentence | ✅ Fixed |
+    | Feature | Description |
+    |---------|-------------|
+    | **Paragraph Detection** | Separates narrative text by double line breaks |
+    | **Dialogue Detection** | Identifies quoted speech (even multi-line) |
+    | **Smart Period Merging** | Sentences < 3 words OR repetitive text are merged with periods |
+    | **Repetitive Text Handling** | Auto-detects "há há há", "hahaha", etc. and merges with adjacent sentences |
+    | **Model-Based Pauses** | AI naturally pauses at periods |
+    | **Special Character Removal** | Removes !?... etc., keeps only letters, numbers, spaces and periods |
+    | **Three Levels** | Short (0.2s/0.1s), Medium (0.4s/0.2s), Long (0.6s/0.3s) |
     
-    ### 💡 How It Works:
-    1. **Detects** repeated words (same word 2+ times)
-    2. **Simplifies** to single occurrence
-    3. **Merges** with adjacent sentence
-    4. **Skips** if merging fails (prevents crash)
+    ### 📖 Usage Tips:
+    - **Separate paragraphs** with double line breaks (`\n\n`)
+    - **Dialogue** can span multiple lines - just use quotes `"..."`
+    - **Short sentences** (< 3 words) are automatically merged
+    - **Repetitive sounds** like "Há há há..." are merged with nearby sentences
+    - **Special characters** (!!!, ???, ...) are automatically removed
+    - **Natural prosody**: Model creates pauses at periods
+    - **Short**: Fast-paced reading
+    - **Medium**: Natural storytelling (recommended)
+    - **Long**: Dramatic audiobooks
     
-    ### 📖 Features:
-    - ✅ Handles repeated laughter ("Há há há")
-    - ✅ Handles repeated exclamations ("A a a!!!")
-    - ✅ Cleans excessive punctuation ("!!!!" → "!")
-    - ✅ Smart merging with context
-    - ✅ Graceful skipping if unprocessable
+    ### 🎯 Example Processing:
+    ```
+    Input:
+    "Há há há..."
+    Minh Huy căng mắt nhìn.
+    
+    → "Há há há..." is repetitive, merged as:
+    "Há há há. Minh Huy căng mắt nhìn."
+    
+    Input:
+    "A!!!!!!!"
+    
+    → Special characters removed:
+    "A" → Too short, merged with next sentence
+    
+    Input:
+    Chớp mắt một cái. "Há há há..." Minh Huy căng mắt.
+    
+    → Processed as:
+    "Chớp mắt một cái. Há há há. Minh Huy căng mắt."
+    ```
     
     ### ⚠️ Note:
-    - Repeated words are simplified to avoid TTS model issues
-    - If a repeated pattern can't be merged, it will be skipped
-    - Check console logs for processing details
+    - Each sentence is processed separately, then combined with real silence
+    - Sentences with < 3 words OR repetitive patterns are merged using periods
+    - All special characters except periods are removed before TTS
+    - Longer texts take more time but produce better pause quality
     """)
     
     with gr.Accordion("❗ Model Limitations", open=False):
         gr.Markdown("""
         1. **Numbers & Special Characters**: May not pronounce dates/phone numbers correctly
         2. **Audio Quality**: Use clear reference audio without background noise
-        3. **Repeated Words**: Now handled automatically (merged or skipped)
-        4. **Processing Time**: Increases with text length
+        3. **Reference Text**: Auto-transcribed with Whisper (may have errors)
+        4. **Processing Time**: Increases with text length (sentence-by-sentence processing)
         5. **Foreign Words**: Pronounced phonetically in Vietnamese
+        6. **Very Short Sentences**: Sentences < 3 words are automatically merged
+        7. **Repetitive Text**: Patterns like "há há há" are merged with adjacent sentences
+        8. **Special Characters**: All special characters except periods are removed (!!!, ???, ... → removed)
+        9. **Error Recovery**: If one sentence fails, processing continues with remaining text
         """)
 
     # Connect button to function
