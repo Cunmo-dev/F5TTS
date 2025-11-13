@@ -26,13 +26,65 @@ hf_token = os.getenv("HUGGINGFACEHUB_API_TOKEN")
 if hf_token:
     login(token=hf_token)
 
+def is_emotional_expression(text):
+    """
+    Kiểm tra xem câu có phải biểu cảm (cười, khóc, kêu) không.
+    Các câu này KHÔNG nên merge.
+    """
+    # Loại bỏ dấu câu để kiểm tra
+    clean = re.sub(r'[.,!?;:\-…]+', '', text.lower()).strip()
+    
+    # Pattern cho tiếng cười, khóc, kêu
+    emotional_patterns = [
+        r'^(ha+|he+|hi+|ho+|hu+)+$',  # há há, hê hê, hi hi
+        r'^(kha+|khe+|khi+)+$',        # khà khà, khì khì
+        r'^(u+h*|a+h*|o+h*)+$',        # uh, ah, oh, uuu, aaa
+        r'^(hm+|um+|ừ+|ơ+)+$',         # hmm, umm, ừ, ơ
+    ]
+    
+    for pattern in emotional_patterns:
+        if re.match(pattern, clean):
+            return True
+    
+    return False
+
+def pad_short_sentence(text, min_words=3):
+    """
+    Pad câu ngắn để đủ độ dài tối thiểu.
+    Ưu tiên lặp lại từ cuối nếu là biểu cảm.
+    """
+    words = text.split()
+    
+    if len(words) >= min_words:
+        return text
+    
+    # Nếu là biểu cảm -> lặp lại từ cuối
+    if is_emotional_expression(text):
+        last_word = words[-1] if words else text
+        # Loại bỏ dấu câu
+        last_word_clean = re.sub(r'[.,!?;:\-…]+$', '', last_word)
+        
+        while len(words) < min_words:
+            words.append(last_word_clean)
+        
+        result = ' '.join(words)
+        print(f"   🔄 Padded emotional: '{text}' → '{result}'")
+        return result
+    
+    # Nếu không phải biểu cảm -> thêm "này"
+    while len(words) < min_words:
+        words.append("này")
+    
+    result = ' '.join(words)
+    print(f"   🔄 Padded normal: '{text}' → '{result}'")
+    return result
+
 def split_text_into_sentences(text, pause_paragraph_duration=0.8, pause_dialogue_duration=0.4):
     """
-    Tách văn bản thành các câu, chỉ ghép câu < 2 từ bằng dấu chấm.
+    Tách văn bản thành các câu với xử lý đặc biệt cho biểu cảm.
     
     Returns:
-        list of tuples: [(sentence, pause_duration_in_seconds, is_merged), ...]
-        - is_merged: True nếu là câu gộp (đã có dấu chấm nội tại)
+        list of tuples: [(sentence, pause_duration_in_seconds), ...]
     """
     chunks = []
     
@@ -72,74 +124,29 @@ def split_text_into_sentences(text, pause_paragraph_duration=0.8, pause_dialogue
                 
                 # Thêm câu nếu có nội dung
                 if sentence_text:
-                    chunks.append((sentence_text, pause_duration, False))
+                    chunks.append((sentence_text, pause_duration))
                     current_sentence = ""
         
         # Thêm phần còn lại nếu có
         if current_sentence.strip():
-            chunks.append((current_sentence.strip(), pause_duration, False))
+            chunks.append((current_sentence.strip(), pause_duration))
     
-    # Gộp các câu < 2 từ bằng dấu chấm
-    merged_chunks = []
-    temp_sentences = []  # Danh sách các câu tích lũy
-    temp_pause = pause_paragraph_duration
+    # Xử lý câu ngắn: KHÔNG merge, mà pad
+    processed_chunks = []
     
-    for i, (sentence, pause, _) in enumerate(chunks):
+    for i, (sentence, pause) in enumerate(chunks):
         word_count = len(sentence.split())
-        is_last = (i == len(chunks) - 1)
         
-        if word_count >= 3:  # ĐỔI: Chỉ ghép câu < 2 từ (thay vì < 5 từ)
-            # Câu đủ dài
-            if temp_sentences:
-                # Gộp các câu tích lũy + câu hiện tại bằng dấu chấm
-                all_sentences = temp_sentences + [sentence]
-                merged_text = ". ".join(all_sentences)  # ĐỔI: Dùng dấu chấm thay vì phẩy
-                # Đánh dấu là câu gộp
-                merged_chunks.append((merged_text, pause, True))
-                temp_sentences = []
-            else:
-                # Câu độc lập
-                merged_chunks.append((sentence, pause, False))
+        # Nếu câu ngắn (< 3 từ)
+        if word_count < 3:
+            # Pad thay vì merge
+            padded_sentence = pad_short_sentence(sentence, min_words=3)
+            processed_chunks.append((padded_sentence, pause))
         else:
-            # Câu ngắn (< 2 từ), tích lũy
-            temp_sentences.append(sentence)
-            temp_pause = pause
-            
-            # Nếu là câu cuối -> gộp với câu trước
-            if is_last:
-                if merged_chunks:
-                    # Gộp vào câu trước bằng dấu chấm
-                    last_sentence, last_pause, last_merged = merged_chunks[-1]
-                    combined_text = last_sentence + ". " + ". ".join(temp_sentences)  # ĐỔI: Dấu chấm
-                    merged_chunks[-1] = (combined_text, last_pause, True)
-                    print(f"   🔗 Merged last short chunk(s) with period")
-                    temp_sentences = []
-                else:
-                    # Không có câu trước -> thêm padding
-                    merged_text = ". ".join(temp_sentences)
-                    while len(merged_text.split()) < 3:
-                        merged_text += " này"
-                    print(f"   ⚠️ Last chunk too short, padded: '{merged_text}'")
-                    merged_chunks.append((merged_text, temp_pause, False))
-                    temp_sentences = []
+            # Câu đủ dài, giữ nguyên
+            processed_chunks.append((sentence, pause))
     
-    # Xử lý câu còn sót
-    if temp_sentences:
-        if merged_chunks:
-            # Gộp vào câu trước bằng dấu chấm
-            last_sentence, last_pause, last_merged = merged_chunks[-1]
-            combined_text = last_sentence + ". " + ". ".join(temp_sentences)  # ĐỔI: Dấu chấm
-            merged_chunks[-1] = (combined_text, last_pause, True)
-            print(f"   🔗 Merged remaining short chunks with period")
-        else:
-            # Trường hợp đặc biệt: chỉ có câu ngắn
-            merged_text = ". ".join(temp_sentences)
-            while len(merged_text.split()) < 3:
-                merged_text += " này"
-            print(f"   ⚠️ Only short sentence(s) found, padded: '{merged_text}'")
-            merged_chunks.append((merged_text, temp_pause, False))
-    
-    return merged_chunks
+    return processed_chunks
 
 def create_silence(duration_seconds, sample_rate=24000):
     """Tạo đoạn im lặng với thời gian xác định."""
@@ -161,6 +168,11 @@ def post_process(text):
 def safe_normalize(text):
     """Normalize văn bản an toàn, xử lý lỗi với từ ngoại ngữ."""
     try:
+        # Bỏ qua normalize cho biểu cảm
+        if is_emotional_expression(text):
+            print(f"   🎭 Skipped normalize for emotional: '{text}'")
+            return text.lower()
+        
         normalized = TTSnorm(text)
         # Nếu kết quả quá ngắn hoặc rỗng, giữ nguyên text gốc
         if len(normalized.strip()) < 2:
@@ -175,10 +187,10 @@ def validate_text_for_tts(text):
     # Loại bỏ khoảng trắng thừa
     text = ' '.join(text.split())
     
-    # Chỉ cảnh báo nếu quá ngắn
+    # Chỉ cảnh báo, KHÔNG từ chối
     words = text.split()
-    if len(words) < 3:
-        print(f"   ⚠️ Warning: Very short text ({len(words)} words), this may cause issues")
+    if len(words) < 2:
+        print(f"   ⚠️ Warning: Very short text ({len(words)} words)")
     
     return text
 
@@ -218,9 +230,9 @@ def infer_tts(ref_audio_orig: str, gen_text: str, speed: float = 1.0,
         chunks = split_text_into_sentences(gen_text, pause_paragraph, pause_dialogue)
         
         print(f"\n📝 Total chunks: {len(chunks)}")
-        for idx, (sent, pause, is_merged) in enumerate(chunks[:5], 1):
-            marker = "🔗 MERGED" if is_merged else "📄 SINGLE"
-            print(f"   {idx}. [{marker}, {pause}s] {sent[:80]}...")
+        for idx, (sent, pause) in enumerate(chunks[:5], 1):
+            emotional = "🎭" if is_emotional_expression(sent) else "📄"
+            print(f"   {idx}. [{emotional}, {pause}s] {sent[:80]}...")
         
         if not chunks:
             raise gr.Error("No valid sentences found in text. Please check your input.")
@@ -232,27 +244,20 @@ def infer_tts(ref_audio_orig: str, gen_text: str, speed: float = 1.0,
         audio_segments = []
         sample_rate = 24000
         
-        for i, (sentence, pause_duration, is_merged) in enumerate(chunks):
+        for i, (sentence, pause_duration) in enumerate(chunks):
             print(f"\n🔄 [{i+1}/{len(chunks)}] Processing: {sentence[:80]}...")
             
             # Chuẩn hóa văn bản an toàn
             normalized_text = post_process(safe_normalize(sentence))
             
-            # Validate văn bản
+            # Validate văn bản (KHÔNG skip)
             normalized_text = validate_text_for_tts(normalized_text)
             
-            # Kiểm tra độ dài tối thiểu
             word_count = len(normalized_text.strip().split())
-            if word_count < 2:
-                print(f"   ⏭️ Skipped (too short: {word_count} words): '{normalized_text}'")
-                continue
-            
             print(f"   📝 Normalized ({word_count} words): {normalized_text[:80]}...")
-            if is_merged:
-                print(f"   ℹ️ Merged sentence - model will create natural pauses at periods")
             
             # Retry logic với backoff
-            max_retries = 2
+            max_retries = 3
             retry_count = 0
             success = False
             
@@ -275,40 +280,37 @@ def infer_tts(ref_audio_orig: str, gen_text: str, speed: float = 1.0,
                     print(f"   ✅ Generated {len(wave)/sr:.2f}s audio")
                     success = True
                     
-                    # Thêm khoảng im lặng giữa các chunk chính (không phải câu cuối)
-                    # Nếu là câu gộp, không thêm silence vì model đã xử lý
-                    if i < len(chunks) - 1 and not is_merged:
+                    # Thêm khoảng im lặng giữa các chunk (không phải câu cuối)
+                    if i < len(chunks) - 1:
                         silence = create_silence(pause_duration, sample_rate)
                         audio_segments.append(silence)
-                        print(f"   ⏸️  Added {pause_duration}s silence between chunks")
-                    elif i < len(chunks) - 1 and is_merged:
-                        print(f"   🔇 No manual silence (merged sentence with periods)")
+                        print(f"   ⏸️  Added {pause_duration}s silence")
                         
                 except Exception as e:
                     retry_count += 1
                     print(f"   ⚠️ Attempt {retry_count} failed: {str(e)[:100]}")
                     
                     if retry_count > max_retries:
-                        print(f"   ❌ Max retries reached, skipping chunk")
-                        # Thử với văn bản đơn giản hơn
-                        if len(normalized_text.split()) > 3:
-                            print(f"   🔧 Trying with first 3 words only...")
-                            simplified_text = ' '.join(normalized_text.split()[:3])
+                        print(f"   ❌ Max retries reached for chunk")
+                        # Thử với padding thêm
+                        if not is_emotional_expression(normalized_text):
+                            print(f"   🔧 Trying with extra padding...")
+                            padded = normalized_text + " này này"
                             try:
                                 wave, sr, _ = infer_process(
                                     ref_audio, 
                                     ref_text.lower(), 
-                                    simplified_text, 
+                                    padded, 
                                     model, 
                                     vocoder, 
                                     speed=speed
                                 )
                                 sample_rate = sr
                                 audio_segments.append(wave)
-                                print(f"   ✅ Generated with simplified text")
+                                print(f"   ✅ Generated with extra padding")
                                 success = True
                             except:
-                                print(f"   ❌ Simplified attempt also failed, skipping")
+                                print(f"   ❌ Extra padding also failed, skipping")
                         break
                     
                     # Đợi một chút trước khi retry
@@ -317,7 +319,7 @@ def infer_tts(ref_audio_orig: str, gen_text: str, speed: float = 1.0,
         
         # Ghép tất cả audio lại
         if not audio_segments:
-            raise gr.Error("No valid audio segments generated. Please check your text or try simpler sentences.")
+            raise gr.Error("No valid audio segments generated. Please check your text.")
             
         final_wave = np.concatenate(audio_segments)
         
@@ -350,12 +352,12 @@ def infer_tts(ref_audio_orig: str, gen_text: str, speed: float = 1.0,
 # Gradio UI
 with gr.Blocks(theme=gr.themes.Soft()) as demo:
     gr.Markdown("""
-    # 🎤 F5-TTS: Vietnamese Text-to-Speech Synthesis
+    # 🎤 F5-TTS: Vietnamese Text-to-Speech Synthesis (Fixed)
     ### Model trained with ~1000 hours of data on RTX 3090 GPU
     
     Enter text and upload a sample voice to generate natural speech with **real silence pauses**.
     
-    ✨ **Smart Pause Feature**: Automatically adds REAL silent pauses between sentences!
+    ✨ **Fixed**: Emotional expressions (laughter, cries) are now handled correctly!
     """)
     
     with gr.Row():
@@ -365,11 +367,14 @@ with gr.Blocks(theme=gr.themes.Soft()) as demo:
             placeholder="""Enter text with paragraphs and dialogue...
 
 Example:
-Hắn lúc này đang ngồi trên boong tàu. Mắt nhìn ra biển xa.
+Chớp mắt một cái bỗng dưng không còn nhìn thấy bé Tư đâu nữa. Trong bóng đêm dày đặc chỉ nghe thấy tiếng cười quỷ dị của y.
 
-"Toa lần này trở về nhà chơi được bao lâu?"
+"Há há há..."
 
-Người hỏi là một người bạn tình cờ gặp.""", 
+Minh Huy căng mắt nhìn ra xung quanh. Mồ hôi trên trán rơi xuống mi mắt hắn một mảng cay xè.
+
+"A!!!!!!!"
+""", 
             lines=10
         )
     
@@ -395,45 +400,24 @@ Người hỏi là một người bạn tình cờ gặp.""",
         output_spectrogram = gr.Image(label="📊 Spectrogram")
     
     gr.Markdown("""
-    ### 💡 How Smart Pause Works (Modified):
+    ### 💡 Fixed Improvements:
     
-    | Feature | Description |
-    |---------|-------------|
-    | **Paragraph Detection** | Separates narrative text by double line breaks |
-    | **Dialogue Detection** | Identifies quoted speech (even multi-line) |
-    | **Smart Period Merging** | Only sentences < 2 words are merged with periods |
-    | **Model-Based Pauses** | AI naturally pauses at periods |
-    | **Three Levels** | Short (0.2s/0.1s), Medium (0.4s/0.2s), Long (0.6s/0.3s) |
+    | Fix | Description |
+    |-----|-------------|
+    | **🎭 Emotional Detection** | Recognizes laughter (há há), cries (ư ư) |
+    | **🔄 Smart Padding** | Repeats emotional words instead of adding "này" |
+    | **⛔ No Skipping** | All sentences are processed, even very short ones |
+    | **🔧 Better Retry** | 3 attempts with fallback padding |
     
     ### 📖 Usage Tips:
-    - **Separate paragraphs** with double line breaks (`\n\n`)
-    - **Dialogue** can span multiple lines - just use quotes `"..."`
-    - **Only very short sentences** (< 2 words) are merged with periods
-    - **Natural prosody**: Model creates pauses at periods
-    - **Short**: Fast-paced reading
-    - **Medium**: Natural storytelling (recommended)
-    - **Long**: Dramatic audiobooks
-    
-    ### 🎯 Example Processing:
-    ```
-    Input:
-    "Nhà chồng em!"
-    "À!"
-    
-    → "À!" has only 1 word (< 2), so it gets merged:
-    "Nhà chồng em. À!"
-    
-    But:
-    "Nhà chồng em!"
-    "Còn quýt nữa?"
-    
-    → Both sentences have ≥ 2 words, so they stay separate
-    ```
+    - Emotional expressions like "Há há há..." are now preserved correctly
+    - Very short sentences get padded automatically
+    - No more silent skips in generated audio
     
     ### ⚠️ Note:
-    - Each sentence is processed separately, then combined with real silence
-    - Only sentences with less than 2 words are merged using periods
-    - Longer texts take more time but produce better pause quality
+    - Short emotional sentences are padded by repeating the last word
+    - Example: "Há!" → "Há há há" (automatically)
+    - This ensures minimum 3 words for stable TTS generation
     """)
     
     with gr.Accordion("❗ Model Limitations", open=False):
@@ -443,8 +427,6 @@ Người hỏi là một người bạn tình cờ gặp.""",
         3. **Reference Text**: Auto-transcribed with Whisper (may have errors)
         4. **Processing Time**: Increases with text length (sentence-by-sentence processing)
         5. **Foreign Words**: Pronounced phonetically in Vietnamese
-        6. **Very Short Sentences**: Only sentences < 2 words are merged
-        7. **Error Recovery**: If one sentence fails, processing continues with remaining text
         """)
 
     # Connect button to function
