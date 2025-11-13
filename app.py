@@ -412,4 +412,114 @@ with gr.Blocks(theme=gr.themes.Soft()) as demo:
         ref_audio = gr.Audio(label="🔊 Sample Voice", type="filepath")
         gen_text = gr.Textbox(
             label="📝 Text to Generate", 
-            placeholder="""Enter text
+            placeholder="""Enter text with paragraphs and dialogue...
+
+Example:
+Hắn lúc này đang ngồi trên boong tàu. Mắt nhìn ra biển xa.
+
+"Toa lần này trở về nhà chơi được bao lâu?"
+
+Người hỏi là một người bạn tình cờ gặp.""", 
+            lines=10
+        )
+    
+    with gr.Row():
+        speed = gr.Slider(
+            minimum=0.3, 
+            maximum=2.0, 
+            value=1.0, 
+            step=0.1, 
+            label="⚡ Speed"
+        )
+        pause_level = gr.Radio(
+            choices=["Short", "Medium", "Long"],
+            value="Medium",
+            label="⏸️ Pause Duration",
+            info="Controls REAL silence duration between sentences"
+        )
+    
+    btn_synthesize = gr.Button("🔥 Generate Voice", variant="primary", size="lg")
+    
+    with gr.Row():
+        output_audio = gr.Audio(label="🎧 Generated Audio", type="numpy")
+        output_spectrogram = gr.Image(label="📊 Spectrogram")
+    
+    gr.Markdown("""
+    ### 💡 How Smart Pause Works:
+    
+    | Feature | Description |
+    |---------|-------------|
+    | **Paragraph Detection** | Separates narrative text by double line breaks |
+    | **Dialogue Detection** | Identifies quoted speech (even multi-line) |
+    | **Smart Period Merging** | Sentences < 3 words OR repetitive text are merged with periods |
+    | **Repetitive Text Handling** | Auto-detects "há há há", "hahaha", etc. and merges with adjacent sentences |
+    | **Model-Based Pauses** | AI naturally pauses at periods |
+    | **Special Character Removal** | Removes !?... etc., keeps only letters, numbers, spaces and periods |
+    | **Consistent Silence** | ALWAYS adds silence between chunks (like original code) |
+    | **Three Levels** | Short (0.2s/0.1s), Medium (0.4s/0.2s), Long (0.6s/0.3s) |
+    
+    ### 📖 Usage Tips:
+    - **Separate paragraphs** with double line breaks (`\n\n`)
+    - **Dialogue** can span multiple lines - just use quotes `"..."`
+    - **Short sentences** (< 3 words) are automatically merged
+    - **Repetitive sounds** like "Há há há..." are merged with nearby sentences
+    - **Special characters** (!!!, ???, ...) are automatically removed
+    - **Natural prosody**: Model creates pauses at periods + manual silence between chunks
+    - **Short**: Fast-paced reading
+    - **Medium**: Natural storytelling (recommended)
+    - **Long**: Dramatic audiobooks
+    
+    ### 🎯 Example Processing:
+    ```
+    Input:
+    "Há há há..."
+    Minh Huy căng mắt nhìn.
+    
+    → "Há há há..." is repetitive, merged as:
+    "Há há há. Minh Huy căng mắt nhìn."
+    + 0.4s silence after this chunk
+    
+    Input:
+    "A!!!!!!!"
+    
+    → Special characters removed:
+    "A" → Too short, merged with next sentence
+    
+    Input:
+    Chớp mắt một cái. "Há há há..." Minh Huy căng mắt.
+    
+    → Processed as:
+    "Chớp mắt một cái. Há há há. Minh Huy căng mắt."
+    + silence after each chunk
+    ```
+    
+    ### ⚠️ Note:
+    - Each sentence is processed separately, then combined with real silence
+    - Sentences with < 3 words OR repetitive patterns are merged using periods
+    - All special characters except periods are removed before TTS
+    - **Silence is ALWAYS added between chunks** (merged or not)
+    - Longer texts take more time but produce better pause quality
+    """)
+    
+    with gr.Accordion("❗ Model Limitations", open=False):
+        gr.Markdown("""
+        1. **Numbers & Special Characters**: May not pronounce dates/phone numbers correctly
+        2. **Audio Quality**: Use clear reference audio without background noise
+        3. **Reference Text**: Auto-transcribed with Whisper (may have errors)
+        4. **Processing Time**: Increases with text length (sentence-by-sentence processing)
+        5. **Foreign Words**: Pronounced phonetically in Vietnamese
+        6. **Very Short Sentences**: Sentences < 3 words are automatically merged
+        7. **Repetitive Text**: Patterns like "há há há" are merged with adjacent sentences
+        8. **Special Characters**: All special characters except periods are removed (!!!, ???, ... → removed)
+        9. **Error Recovery**: If one sentence fails, processing continues with remaining text
+        """)
+
+    # Connect button to function
+    btn_synthesize.click(
+        infer_tts, 
+        inputs=[ref_audio, gen_text, speed, pause_level], 
+        outputs=[output_audio, output_spectrogram]
+    )
+
+# Launch with public link
+demo.queue().launch(share=True)
