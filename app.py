@@ -109,6 +109,7 @@ def split_text_into_sentences(text, pause_paragraph_duration=0.8, pause_dialogue
             chunks.append((current_sentence.strip(), pause_duration, False))
     
     # Gộp các câu < 3 từ HOẶC câu lặp lại bằng dấu chấm
+    # NHƯNG GIỮ NGUYÊN PAUSE CỦA TỪNG CÂU RIÊNG LẺ
     merged_chunks = []
     temp_sentences = []  # Danh sách các câu tích lũy
     temp_pause = pause_paragraph_duration
@@ -127,13 +128,14 @@ def split_text_into_sentences(text, pause_paragraph_duration=0.8, pause_dialogue
                 # Gộp các câu tích lũy + câu hiện tại bằng dấu chấm
                 all_sentences = temp_sentences + [sentence]
                 merged_text = ". ".join(all_sentences)
-                # QUAN TRỌNG: Giữ pause của câu CUỐI CÙNG (câu hiện tại)
+                # FIX: Vì đã gộp câu bằng dấu chấm, model sẽ tự tạo pause
+                # Chỉ cần pause NGẮN sau chunk này (không cần pause dài)
                 merged_chunks.append((merged_text, pause, True))
                 temp_sentences = []
                 if is_repetitive:
                     print(f"   🔗 Merged repetitive text: '{sentence[:50]}...'")
             else:
-                # Câu độc lập
+                # Câu độc lập - giữ nguyên pause
                 merged_chunks.append((sentence, pause, False))
         else:
             # Câu ngắn (< 3 từ) HOẶC câu lặp, tích lũy
@@ -149,8 +151,8 @@ def split_text_into_sentences(text, pause_paragraph_duration=0.8, pause_dialogue
                     # Gộp vào câu trước bằng dấu chấm
                     last_sentence, last_pause, last_merged = merged_chunks[-1]
                     combined_text = last_sentence + ". " + ". ".join(temp_sentences)
-                    # QUAN TRỌNG: Giữ pause của câu gộp (temp_pause)
-                    merged_chunks[-1] = (combined_text, temp_pause, True)
+                    # FIX: Giữ nguyên pause của câu trước (đã gộp rồi không cần pause dài)
+                    merged_chunks[-1] = (combined_text, last_pause, True)
                     print(f"   🔗 Merged last short/repetitive chunk(s) with period")
                     temp_sentences = []
                 else:
@@ -168,8 +170,8 @@ def split_text_into_sentences(text, pause_paragraph_duration=0.8, pause_dialogue
             # Gộp vào câu trước bằng dấu chấm
             last_sentence, last_pause, last_merged = merged_chunks[-1]
             combined_text = last_sentence + ". " + ". ".join(temp_sentences)
-            # QUAN TRỌNG: Giữ pause của câu gộp (temp_pause)
-            merged_chunks[-1] = (combined_text, temp_pause, True)
+            # FIX: Giữ nguyên pause của câu trước
+            merged_chunks[-1] = (combined_text, last_pause, True)
             print(f"   🔗 Merged remaining short/repetitive chunks with period")
         else:
             # Trường hợp đặc biệt: chỉ có câu ngắn
@@ -327,12 +329,21 @@ def infer_tts(ref_audio_orig: str, gen_text: str, speed: float = 1.0,
                     print(f"   ✅ Generated {len(wave)/sr:.2f}s audio")
                     success = True
                     
-                    # LOGIC GỐC: Thêm khoảng im lặng giữa các chunk (không phải câu cuối)
-                    # Không phân biệt merged hay không - áp dụng ĐỒNG NHẤT
+                    # LOGIC TỐI ƯU: 
+                    # - Nếu là câu MERGED: Model đã tự tạo pause tại dấu chấm -> CHỈ THÊM SILENCE NGẮN
+                    # - Nếu là câu SINGLE: Cần thêm silence đầy đủ
                     if i < len(chunks) - 1:
-                        silence = create_silence(pause_duration, sample_rate)
-                        audio_segments.append(silence)
-                        print(f"   ⏸️  Added {pause_duration}s silence after chunk")
+                        if is_merged:
+                            # Câu gộp: Model đã pause tại dấu chấm -> chỉ cần thêm 50% silence
+                            reduced_pause = pause_duration * 0.5
+                            silence = create_silence(reduced_pause, sample_rate)
+                            audio_segments.append(silence)
+                            print(f"   ⏸️  Added {reduced_pause}s reduced silence (merged sentence)")
+                        else:
+                            # Câu đơn: Thêm silence đầy đủ như code gốc
+                            silence = create_silence(pause_duration, sample_rate)
+                            audio_segments.append(silence)
+                            print(f"   ⏸️  Added {pause_duration}s full silence")
                         
                 except Exception as e:
                     retry_count += 1
