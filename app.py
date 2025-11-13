@@ -28,47 +28,88 @@ if hf_token:
 
 def is_problematic_text(text):
     """
-    Kiểm tra văn bản có vấn đề (chỉ chứa ký tự lặp lại, quá ngắn, hoặc không hợp lệ).
+    Kiểm tra văn bản có vấn đề (lặp từ, chỉ có dấu câu, quá ngắn...)
     """
-    # Loại bỏ khoảng trắng và dấu câu
-    clean = re.sub(r'[^\w]', '', text, flags=re.UNICODE)
+    # Loại bỏ khoảng trắng và chuyển thường
+    clean = text.strip().lower()
     
-    # Kiểm tra nếu rỗng
-    if not clean:
-        return True
+    # Kiểm tra nếu chỉ có dấu câu và khoảng trắng
+    if re.match(r'^[.,!?;:\s]+$', clean):
+        return True, "only_punctuation"
     
-    # Kiểm tra nếu chỉ có 1-2 ký tự lặp lại (như "há há há", "à à à")
-    unique_chars = set(clean.lower())
-    if len(unique_chars) <= 2 and len(clean) >= 3:
-        # Kiểm tra nếu là ký tự lặp lại
-        char_counts = {}
-        for char in clean.lower():
-            char_counts[char] = char_counts.get(char, 0) + 1
+    # Kiểm tra lặp từ (3+ từ giống nhau liên tiếp)
+    words = clean.split()
+    if len(words) >= 3:
+        # Kiểm tra lặp từ đơn: "há há há"
+        if len(set(words)) == 1:
+            return True, "repeated_word"
         
-        # Nếu có ký tự chiếm > 70% -> coi như lặp lại
-        max_count = max(char_counts.values())
-        if max_count / len(clean) > 0.7:
-            return True
+        # Kiểm tra pattern lặp: "ha ha ha"
+        unique_ratio = len(set(words)) / len(words)
+        if unique_ratio < 0.4:  # Nếu < 40% từ là unique
+            return True, "low_diversity"
     
-    return False
+    # Kiểm tra chỉ có âm thanh không có nghĩa
+    sound_patterns = [r'^(ha|he|hi|ho|hu|a|e|i|o|u|ơ|ư|á|à|ả|ã|ạ)+$']
+    for pattern in sound_patterns:
+        if re.match(pattern, clean.replace(' ', '')):
+            return True, "sound_only"
+    
+    return False, None
 
-def fix_problematic_text(text):
-    """
-    Sửa văn bản có vấn đề bằng cách thêm ngữ cảnh.
-    """
+def safe_normalize(text):
+    """Normalize văn bản an toàn, xử lý các trường hợp đặc biệt."""
+    try:
+        # Kiểm tra văn bản có vấn đề TRƯỚC khi normalize
+        is_problematic, reason = is_problematic_text(text)
+        if is_problematic:
+            print(f"   ⚠️ Problematic text detected ({reason}): '{text[:50]}...' - WILL BE SKIPPED")
+            # Trả về None để báo hiệu cần skip
+            return None
+        
+        # Normalize bình thường
+        normalized = TTSnorm(text)
+        
+        # Kiểm tra kết quả sau normalize
+        if len(normalized.strip()) < 2:
+            print(f"   ⚠️ Normalized result too short, using original")
+            return text.lower()
+        
+        # Kiểm tra lại sau normalize
+        is_prob_after, reason_after = is_problematic_text(normalized)
+        if is_prob_after:
+            print(f"   ⚠️ Problematic after normalize ({reason_after}) - WILL BE SKIPPED")
+            return None
+        
+        return normalized.lower()
+        
+    except Exception as e:
+        print(f"   ⚠️ TTSnorm error: {e}, using original text")
+        return text.lower()
+
+def validate_text_for_tts(text):
+    """Kiểm tra và làm sạch văn bản trước khi đưa vào TTS."""
     # Loại bỏ khoảng trắng thừa
     text = ' '.join(text.split())
     
-    # Nếu là tiếng cười "há há há" -> thêm từ "cười"
-    if re.search(r'\bh[áà](\s+h[áà])+\b', text.lower()):
-        return "cười " + text
+    # Kiểm tra văn bản có vấn đề
+    is_problematic, reason = is_problematic_text(text)
+    if is_problematic:
+        print(f"   🚫 Invalid text ({reason}): '{text[:50]}...'")
+        return None  # Trả về None để skip
     
-    # Nếu là "à à à" hoặc "ừ ừ ừ" -> thêm "nói"
-    if re.search(r'\b[àừ](\s+[àừ])+\b', text.lower()):
-        return "nói " + text
+    # Kiểm tra độ dài tối thiểu
+    words = text.split()
+    if len(words) < 2:
+        print(f"   ⚠️ Too short ({len(words)} words), padding...")
+        text = text + " đó nha"
     
-    # Các trường hợp khác: thêm "người nói"
-    return "người nói " + text
+    # Kiểm tra độ dài tối đa (tránh câu quá dài)
+    if len(words) > 100:
+        print(f"   ⚠️ Too long ({len(words)} words), truncating...")
+        text = ' '.join(words[:100])
+    
+    return text
 
 def split_text_into_sentences(text, pause_paragraph_duration=0.8, pause_dialogue_duration=0.4):
     """
@@ -125,7 +166,7 @@ def split_text_into_sentences(text, pause_paragraph_duration=0.8, pause_dialogue
     
     # Gộp các câu < 2 từ bằng dấu chấm
     merged_chunks = []
-    temp_sentences = []
+    temp_sentences = []  # Danh sách các câu tích lũy
     temp_pause = pause_paragraph_duration
     
     for i, (sentence, pause, _) in enumerate(chunks):
@@ -138,24 +179,28 @@ def split_text_into_sentences(text, pause_paragraph_duration=0.8, pause_dialogue
                 # Gộp các câu tích lũy + câu hiện tại bằng dấu chấm
                 all_sentences = temp_sentences + [sentence]
                 merged_text = ". ".join(all_sentences)
+                # Đánh dấu là câu gộp
                 merged_chunks.append((merged_text, pause, True))
                 temp_sentences = []
             else:
                 # Câu độc lập
                 merged_chunks.append((sentence, pause, False))
         else:
-            # Câu ngắn (< 3 từ), tích lũy
+            # Câu ngắn (< 2 từ), tích lũy
             temp_sentences.append(sentence)
             temp_pause = pause
             
+            # Nếu là câu cuối -> gộp với câu trước
             if is_last:
                 if merged_chunks:
+                    # Gộp vào câu trước bằng dấu chấm
                     last_sentence, last_pause, last_merged = merged_chunks[-1]
                     combined_text = last_sentence + ". " + ". ".join(temp_sentences)
                     merged_chunks[-1] = (combined_text, last_pause, True)
                     print(f"   🔗 Merged last short chunk(s) with period")
                     temp_sentences = []
                 else:
+                    # Không có câu trước -> thêm padding
                     merged_text = ". ".join(temp_sentences)
                     while len(merged_text.split()) < 3:
                         merged_text += " này"
@@ -163,13 +208,16 @@ def split_text_into_sentences(text, pause_paragraph_duration=0.8, pause_dialogue
                     merged_chunks.append((merged_text, temp_pause, False))
                     temp_sentences = []
     
+    # Xử lý câu còn sót
     if temp_sentences:
         if merged_chunks:
+            # Gộp vào câu trước bằng dấu chấm
             last_sentence, last_pause, last_merged = merged_chunks[-1]
             combined_text = last_sentence + ". " + ". ".join(temp_sentences)
             merged_chunks[-1] = (combined_text, last_pause, True)
             print(f"   🔗 Merged remaining short chunks with period")
         else:
+            # Trường hợp đặc biệt: chỉ có câu ngắn
             merged_text = ". ".join(temp_sentences)
             while len(merged_text.split()) < 3:
                 merged_text += " này"
@@ -191,50 +239,9 @@ def post_process(text):
     text = text.replace('"', "")
     text = text.replace('"', "")
     text = text.replace('"', "")
+    # Loại bỏ dấu phẩy dư thừa
     text = re.sub(r',+', ',', text)
     return " ".join(text.split())
-
-def safe_normalize(text):
-    """Normalize văn bản an toàn, xử lý lỗi với từ ngoại ngữ."""
-    try:
-        # Kiểm tra văn bản có vấn đề TRƯỚC KHI normalize
-        if is_problematic_text(text):
-            print(f"   ⚠️ Problematic text detected, fixing: '{text}'")
-            text = fix_problematic_text(text)
-            print(f"   ✅ Fixed to: '{text}'")
-        
-        normalized = TTSnorm(text)
-        
-        # Kiểm tra kết quả sau normalize
-        if len(normalized.strip()) < 2 or is_problematic_text(normalized):
-            print(f"   ⚠️ TTSnorm result too short or problematic, using fixed original")
-            return fix_problematic_text(text).lower()
-        
-        return normalized.lower()
-    except Exception as e:
-        print(f"   ⚠️ TTSnorm error: {e}, using fixed original text")
-        return fix_problematic_text(text).lower()
-
-def validate_text_for_tts(text):
-    """Kiểm tra văn bản trước khi đưa vào TTS."""
-    # Loại bỏ khoảng trắng thừa
-    text = ' '.join(text.split())
-    
-    # Kiểm tra và sửa văn bản có vấn đề
-    if is_problematic_text(text):
-        print(f"   ⚠️ Final validation: problematic text detected")
-        text = fix_problematic_text(text)
-        print(f"   ✅ Final fixed text: '{text}'")
-    
-    words = text.split()
-    if len(words) < 3:
-        print(f"   ⚠️ Warning: Very short text ({len(words)} words), padding...")
-        while len(words) < 3:
-            text += " này"
-            words = text.split()
-        print(f"   ✅ Padded to: '{text}'")
-    
-    return text
 
 # Load models
 vocoder = load_vocoder()
@@ -257,6 +264,7 @@ def infer_tts(ref_audio_orig: str, gen_text: str, speed: float = 1.0,
         raise gr.Error("Please enter the text content to generate voice.")
     
     try:
+        # Cấu hình pause (giây)
         pause_configs = {
             "Short": (0.2, 0.1),
             "Medium": (0.4, 0.2),
@@ -267,6 +275,7 @@ def infer_tts(ref_audio_orig: str, gen_text: str, speed: float = 1.0,
         
         print(f"\n🎛️ Pause config: Paragraph={pause_paragraph}s, Dialogue={pause_dialogue}s")
         
+        # Tách văn bản thành các câu với thời gian dừng
         chunks = split_text_into_sentences(gen_text, pause_paragraph, pause_dialogue)
         
         print(f"\n📝 Total chunks: {len(chunks)}")
@@ -277,30 +286,57 @@ def infer_tts(ref_audio_orig: str, gen_text: str, speed: float = 1.0,
         if not chunks:
             raise gr.Error("No valid sentences found in text. Please check your input.")
         
+        # Preprocess reference audio
         ref_audio, ref_text = preprocess_ref_audio_text(ref_audio_orig, "")
         
+        # Tạo audio cho từng câu và ghép lại
         audio_segments = []
         sample_rate = 24000
+        skipped_count = 0
         
         for i, (sentence, pause_duration, is_merged) in enumerate(chunks):
             print(f"\n🔄 [{i+1}/{len(chunks)}] Processing: {sentence[:80]}...")
             
             # Chuẩn hóa văn bản an toàn
-            normalized_text = post_process(safe_normalize(sentence))
+            normalized_text = safe_normalize(sentence)
             
-            # Validate văn bản
+            # BỎ QUA nếu safe_normalize trả về None (văn bản có vấn đề)
+            if normalized_text is None:
+                print(f"   ⏭️ SKIPPED: Problematic text pattern detected")
+                skipped_count += 1
+                # Thêm khoảng im lặng ngắn thay thế
+                if i < len(chunks) - 1:
+                    silence = create_silence(0.3, sample_rate)
+                    audio_segments.append(silence)
+                continue
+            
+            # Post-process
+            normalized_text = post_process(normalized_text)
+            
+            # Validate văn bản - BỎ QUA nếu không hợp lệ
             normalized_text = validate_text_for_tts(normalized_text)
+            if normalized_text is None:
+                print(f"   ⏭️ SKIPPED: Invalid text after validation")
+                skipped_count += 1
+                # Thêm khoảng im lặng ngắn thay thế
+                if i < len(chunks) - 1:
+                    silence = create_silence(0.3, sample_rate)
+                    audio_segments.append(silence)
+                continue
             
+            # Kiểm tra độ dài tối thiểu
             word_count = len(normalized_text.strip().split())
             if word_count < 2:
                 print(f"   ⏭️ Skipped (too short: {word_count} words): '{normalized_text}'")
+                skipped_count += 1
                 continue
             
             print(f"   📝 Normalized ({word_count} words): {normalized_text[:80]}...")
             if is_merged:
                 print(f"   ℹ️ Merged sentence - model will create natural pauses at periods")
             
-            max_retries = 3
+            # Retry logic với backoff
+            max_retries = 2
             retry_count = 0
             success = False
             
@@ -323,6 +359,7 @@ def infer_tts(ref_audio_orig: str, gen_text: str, speed: float = 1.0,
                     print(f"   ✅ Generated {len(wave)/sr:.2f}s audio")
                     success = True
                     
+                    # Thêm khoảng im lặng giữa các chunk chính
                     if i < len(chunks) - 1 and not is_merged:
                         silence = create_silence(pause_duration, sample_rate)
                         audio_segments.append(silence)
@@ -332,49 +369,53 @@ def infer_tts(ref_audio_orig: str, gen_text: str, speed: float = 1.0,
                         
                 except Exception as e:
                     retry_count += 1
-                    print(f"   ⚠️ Attempt {retry_count} failed: {str(e)[:100]}")
+                    error_msg = str(e)[:100]
+                    print(f"   ⚠️ Attempt {retry_count} failed: {error_msg}")
                     
                     if retry_count > max_retries:
-                        print(f"   ❌ Max retries reached, trying simplified version...")
+                        print(f"   ❌ Max retries reached")
+                        skipped_count += 1
                         
                         # Thử với văn bản đơn giản hóa
-                        words = normalized_text.split()
-                        if len(words) > 5:
-                            simplified_text = ' '.join(words[:5])
-                        elif len(words) > 3:
-                            simplified_text = ' '.join(words[:3])
-                        else:
-                            simplified_text = "người nói " + normalized_text
-                        
-                        try:
-                            print(f"   🔧 Simplified: '{simplified_text}'")
-                            wave, sr, _ = infer_process(
-                                ref_audio, 
-                                ref_text.lower(), 
-                                simplified_text, 
-                                model, 
-                                vocoder, 
-                                speed=speed
-                            )
-                            sample_rate = sr
-                            audio_segments.append(wave)
-                            print(f"   ✅ Generated with simplified text")
-                            success = True
-                        except Exception as e2:
-                            print(f"   ❌ Simplified attempt also failed: {str(e2)[:100]}")
-                            print(f"   ⏭️ Skipping this chunk and continuing...")
+                        if len(normalized_text.split()) > 3:
+                            print(f"   🔧 Trying with first 3 words only...")
+                            simplified_text = ' '.join(normalized_text.split()[:3])
+                            try:
+                                wave, sr, _ = infer_process(
+                                    ref_audio, 
+                                    ref_text.lower(), 
+                                    simplified_text, 
+                                    model, 
+                                    vocoder, 
+                                    speed=speed
+                                )
+                                sample_rate = sr
+                                audio_segments.append(wave)
+                                print(f"   ✅ Generated with simplified text")
+                                success = True
+                                skipped_count -= 1  # Không tính là skip
+                            except:
+                                print(f"   ❌ Simplified attempt also failed, skipping")
                         break
                     
+                    # Đợi một chút trước khi retry
                     import time
                     time.sleep(0.5)
         
+        # Kiểm tra xem có audio nào được tạo không
         if not audio_segments:
-            raise gr.Error("No valid audio segments generated. Please check your text or try simpler sentences.")
-            
+            raise gr.Error("No valid audio segments generated. All sentences were skipped due to problematic patterns (repeated words, sounds only, etc.). Please check your text.")
+        
+        # Cảnh báo nếu có nhiều câu bị skip
+        if skipped_count > 0:
+            print(f"\n⚠️ Warning: {skipped_count} chunk(s) were skipped due to problematic patterns")
+        
+        # Ghép tất cả audio lại
         final_wave = np.concatenate(audio_segments)
         
-        print(f"\n✅ Final audio: {len(final_wave)/sample_rate:.2f}s (from {len(chunks)} chunks)")
+        print(f"\n✅ Final audio: {len(final_wave)/sample_rate:.2f}s (from {len(chunks)-skipped_count}/{len(chunks)} chunks)")
         
+        # Tạo spectrogram
         with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp_spectrogram:
             spectrogram_path = tmp_spectrogram.name
             import matplotlib
@@ -407,7 +448,6 @@ with gr.Blocks(theme=gr.themes.Soft()) as demo:
     Enter text and upload a sample voice to generate natural speech with **real silence pauses**.
     
     ✨ **Smart Pause Feature**: Automatically adds REAL silent pauses between sentences!
-    🔧 **Fixed**: Now handles problematic text like "Há há há..." correctly!
     """)
     
     with gr.Row():
@@ -420,8 +460,6 @@ Example:
 Hắn lúc này đang ngồi trên boong tàu. Mắt nhìn ra biển xa.
 
 "Toa lần này trở về nhà chơi được bao lâu?"
-
-"Há há há..."
 
 Người hỏi là một người bạn tình cờ gặp.""", 
             lines=10
@@ -458,20 +496,33 @@ Người hỏi là một người bạn tình cờ gặp.""",
     | **Smart Period Merging** | Only sentences < 2 words are merged with periods |
     | **Model-Based Pauses** | AI naturally pauses at periods |
     | **Three Levels** | Short (0.2s/0.1s), Medium (0.4s/0.2s), Long (0.6s/0.3s) |
-    | **Problem Text Handler** | ✨ Auto-fixes "Há há há..." and similar patterns |
+    | **Problematic Text Skip** | Auto-skips repeated words, sound-only text (not replaced) |
     
     ### 📖 Usage Tips:
     - **Separate paragraphs** with double line breaks (`\n\n`)
     - **Dialogue** can span multiple lines - just use quotes `"..."`
-    - **Repetitive text** like "Há há há..." is automatically handled
-    - **Only very short sentences** (< 2 words) are merged with periods
+    - **Avoid repeated sounds**: "Há há há", "He he he" will be automatically SKIPPED
     - **Natural prosody**: Model creates pauses at periods
+    - **Short**: Fast-paced reading
+    - **Medium**: Natural storytelling (recommended)
+    - **Long**: Dramatic audiobooks
     
-    ### 🎯 Fixed Issues:
-    - ✅ "Há há há..." now properly converted to speech
-    - ✅ Repetitive patterns automatically get context added
-    - ✅ Better error recovery with simplified fallback
-    - ✅ Increased retry attempts for problematic text
+    ### 🎯 Example Processing:
+    ```
+    Input:
+    "Nhà chồng em!"
+    "Há há há..."
+    "Còn quýt nữa?"
+    
+    → "Há há há..." is problematic (repeated sound) → SKIPPED entirely
+    → Result: Only "Nhà chồng em" and "Còn quýt nữa?" are processed
+    ```
+    
+    ### ⚠️ Note:
+    - **Problematic patterns are auto-detected**: Repeated words, sound-only text, only punctuation
+    - **These will be either skipped or replaced** with descriptive text
+    - Longer texts take more time but produce better pause quality
+    - Check console for detailed processing logs
     """)
     
     with gr.Accordion("❗ Model Limitations", open=False):
@@ -481,14 +532,17 @@ Người hỏi là một người bạn tình cờ gặp.""",
         3. **Reference Text**: Auto-transcribed with Whisper (may have errors)
         4. **Processing Time**: Increases with text length (sentence-by-sentence processing)
         5. **Foreign Words**: Pronounced phonetically in Vietnamese
-        6. **Very Short Sentences**: Only sentences < 2 words are merged
+        6. **Repeated Sounds**: "Há há há", "He he he" etc. will be SKIPPED entirely
         7. **Error Recovery**: If one sentence fails, processing continues with remaining text
+        8. **Text Validation**: Problematic patterns (low diversity, sound-only) are filtered out
         """)
 
+    # Connect button to function
     btn_synthesize.click(
         infer_tts, 
         inputs=[ref_audio, gen_text, speed, pause_level], 
         outputs=[output_audio, output_spectrogram]
     )
 
+# Launch with public link
 demo.queue().launch(share=True)
