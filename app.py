@@ -72,6 +72,31 @@ def is_repetitive_text(text):
     
     return False
 
+def clean_text_before_processing(text):
+    """
+    Làm sạch text trước khi xử lý: loại bỏ emoji và ký tự đặc biệt.
+    """
+    # Loại bỏ emoji (Unicode ranges)
+    emoji_pattern = re.compile(
+        "["
+        "\U0001F600-\U0001F64F"  # emoticons
+        "\U0001F300-\U0001F5FF"  # symbols & pictographs
+        "\U0001F680-\U0001F6FF"  # transport & map symbols
+        "\U0001F1E0-\U0001F1FF"  # flags
+        "\U00002702-\U000027B0"
+        "\U000024C2-\U0001F251"
+        "\U0001F900-\U0001F9FF"  # supplemental symbols
+        "\U0001FA00-\U0001FA6F"
+        "]+", 
+        flags=re.UNICODE
+    )
+    text = emoji_pattern.sub('', text)
+    
+    # Loại bỏ khoảng trắng thừa
+    text = ' '.join(text.split())
+    
+    return text.strip()
+
 def extract_quoted_segments(text):
     """
     Trích xuất các đoạn trong ngoặc kép và text bên ngoài.
@@ -79,6 +104,9 @@ def extract_quoted_segments(text):
     Returns:
         list of tuples: [(text, is_quoted), ...]
     """
+    # Làm sạch text trước
+    text = clean_text_before_processing(text)
+    
     segments = []
     # Pattern để tìm text trong ngoặc kép (hỗ trợ cả ", ", ")
     pattern = r'(["""])([^"""]+)(["""])'
@@ -233,15 +261,10 @@ def create_silence(duration_seconds, sample_rate=24000):
     return np.zeros(num_samples, dtype=np.float32)
 
 def post_process(text):
-    """Làm sạch văn bản."""
-    # Loại bỏ dấu chấm lặp (... -> . hoặc .... -> .)
-    text = re.sub(r'\.{2,}', '.', text)
-    
-    # Loại bỏ khoảng trắng + dấu chấm lặp
-    text = re.sub(r'\s*\.\s*\.\s*', '.', text)
-    
-    # Loại bỏ dấu phẩy dư thừa
-    text = re.sub(r',+', ',', text)
+    """Làm sạch văn bản - loại bỏ tất cả ký tự đặc biệt."""
+    # Loại bỏ tất cả dấu câu và ký tự đặc biệt, chỉ giữ chữ cái, số và khoảng trắng
+    # Giữ lại các ký tự tiếng Việt có dấu
+    text = re.sub(r'[^\w\s]', ' ', text, flags=re.UNICODE)
     
     # Loại bỏ khoảng trắng thừa
     text = " ".join(text.split()).strip()
