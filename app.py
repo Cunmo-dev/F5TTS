@@ -284,10 +284,16 @@ def infer_tts(ref_audio_orig: str, gen_text: str, speed: float = 1.0,
             print(f"\n🔄 [{i+1}/{len(chunks)}] Processing: {sentence[:80]}...")
             
             # Chuẩn hóa văn bản an toàn
-            normalized_text = post_process(safe_normalize(sentence))
+            normalized_text = safe_normalize(sentence)
+            
+            # Post-process PHẢI chạy SAU normalize để loại bỏ dấu chấm lặp
+            normalized_text = post_process(normalized_text)
             
             # Validate văn bản
             normalized_text = validate_text_for_tts(normalized_text)
+            
+            # Loại bỏ dấu chấm cuối cùng nếu có (TTS không cần)
+            normalized_text = normalized_text.rstrip('.')
             
             # Kiểm tra độ dài tối thiểu
             word_count = len(normalized_text.strip().split())
