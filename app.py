@@ -202,6 +202,8 @@ def create_silence(duration_seconds, sample_rate=24000):
 def post_process(text):
     """Làm sạch văn bản."""
     text = " " + text + " "
+    # Xử lý dấu chấm lặp (... -> .)
+    text = re.sub(r'\.{2,}', '.', text)
     text = text.replace(" . . ", " . ")
     text = text.replace(" .. ", " . ")
     text = text.replace('"', "")
@@ -209,7 +211,9 @@ def post_process(text):
     text = text.replace('"', "")
     # Loại bỏ dấu phẩy dư thừa
     text = re.sub(r',+', ',', text)
-    return " ".join(text.split())
+    # Loại bỏ khoảng trắng thừa
+    text = " ".join(text.split())
+    return text
 
 def safe_normalize(text):
     """Normalize văn bản an toàn, xử lý lỗi với từ ngoại ngữ."""
@@ -287,11 +291,17 @@ def infer_tts(ref_audio_orig: str, gen_text: str, speed: float = 1.0,
             
             # Kiểm tra độ dài tối thiểu
             word_count = len(normalized_text.strip().split())
-            if word_count < 2:
-                print(f"   ⏭️ Skipped (too short: {word_count} words): '{normalized_text}'")
+            if word_count < 1:
+                print(f"   ⏭️ Skipped (empty after normalization): '{normalized_text}'")
                 continue
             
-            print(f"   📝 Normalized ({word_count} words): {normalized_text[:80]}...")
+            # Nếu câu quá ngắn (1-2 từ), thêm padding
+            if word_count < 3:
+                original_text = normalized_text
+                normalized_text = normalized_text + " này"
+                print(f"   ⚠️ Short sentence padded: '{original_text}' -> '{normalized_text}'")
+            
+            print(f"   📝 Normalized ({len(normalized_text.split())} words): {normalized_text[:80]}...")
             if is_merged:
                 print(f"   ℹ️ Merged sentence - model will create natural pauses at periods")
             
@@ -414,14 +424,14 @@ with gr.Blocks(theme=gr.themes.Soft()) as demo:
         pause_paragraph = gr.Slider(
             minimum=0.0,
             maximum=1.0,
-            value=0.2,
+            value=0.4,
             step=0.05,
             label="⏸️ Pause (Paragraph)"
         )
         pause_dialogue = gr.Slider(
             minimum=0.0,
             maximum=1.0,
-            value=0.1,
+            value=0.2,
             step=0.05,
             label="⏸️ Pause (Dialogue)"
         )
