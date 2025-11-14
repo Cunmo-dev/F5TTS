@@ -201,18 +201,21 @@ def create_silence(duration_seconds, sample_rate=24000):
 
 def post_process(text):
     """Làm sạch văn bản."""
-    text = " " + text + " "
-    # Xử lý dấu chấm lặp (... -> .)
+    # Loại bỏ ngoặc kép
+    text = text.replace('"', "").replace('"', "").replace('"', "")
+    
+    # Loại bỏ dấu chấm lặp (... -> . hoặc .... -> .)
     text = re.sub(r'\.{2,}', '.', text)
-    text = text.replace(" . . ", " . ")
-    text = text.replace(" .. ", " . ")
-    text = text.replace('"', "")
-    text = text.replace('"', "")
-    text = text.replace('"', "")
+    
+    # Loại bỏ khoảng trắng + dấu chấm lặp
+    text = re.sub(r'\s*\.\s*\.\s*', '.', text)
+    
     # Loại bỏ dấu phẩy dư thừa
     text = re.sub(r',+', ',', text)
+    
     # Loại bỏ khoảng trắng thừa
-    text = " ".join(text.split())
+    text = " ".join(text.split()).strip()
+    
     return text
 
 def safe_normalize(text):
