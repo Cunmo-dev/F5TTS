@@ -72,13 +72,44 @@ def is_repetitive_text(text):
     
     return False
 
+def extract_quoted_segments(text):
+    """
+    Trích xuất các đoạn trong ngoặc kép và text bên ngoài.
+    
+    Returns:
+        list of tuples: [(text, is_quoted), ...]
+    """
+    segments = []
+    # Pattern để tìm text trong ngoặc kép (hỗ trợ cả ", ", ")
+    pattern = r'(["""])([^"""]+)(["""])'
+    
+    last_end = 0
+    for match in re.finditer(pattern, text):
+        # Text trước ngoặc kép
+        before_text = text[last_end:match.start()].strip()
+        if before_text:
+            segments.append((before_text, False))
+        
+        # Text trong ngoặc kép (không bao gồm dấu ngoặc)
+        quoted_text = match.group(2).strip()
+        if quoted_text:
+            segments.append((quoted_text, True))
+        
+        last_end = match.end()
+    
+    # Text sau ngoặc kép cuối cùng
+    after_text = text[last_end:].strip()
+    if after_text:
+        segments.append((after_text, False))
+    
+    return segments
+
 def split_text_into_sentences(text, pause_paragraph_duration=0.8, pause_dialogue_duration=0.4):
     """
-    Tách văn bản thành các câu, ghép câu < 2 từ hoặc câu lặp lại bằng dấu chấm.
+    Tách văn bản thành các câu, giữ nguyên câu trong ngoặc kép.
     
     Returns:
         list of tuples: [(sentence, pause_duration_in_seconds, is_merged), ...]
-        - is_merged: True nếu là câu gộp (đã có dấu chấm nội tại)
     """
     chunks = []
     
@@ -90,44 +121,51 @@ def split_text_into_sentences(text, pause_paragraph_duration=0.8, pause_dialogue
         if not para:
             continue
         
-        # Kiểm tra xem đoạn này có phải toàn bộ là hội thoại không
+        # Tách các dòng trong đoạn
         lines = para.split('\n')
-        combined_text = ' '.join(line.strip() for line in lines if line.strip())
         
-        # Đếm số dấu ngoặc
-        open_quotes = combined_text.count('"') + combined_text.count('"')
-        close_quotes = combined_text.count('"') + combined_text.count('"')
-        
-        # Nếu có dấu ngoặc và cân bằng -> hội thoại
-        is_dialogue = (open_quotes > 0 and open_quotes == close_quotes)
-        pause_duration = pause_dialogue_duration if is_dialogue else pause_paragraph_duration
-        
-        # Loại bỏ dấu ngoặc kép để xử lý
-        clean_text = combined_text.replace('"', '').replace('"', '').replace('"', '').strip()
-        
-        # Tách thành các câu dựa trên dấu câu
-        sentences = re.split(r'([.!?]+)', clean_text)
-        
-        current_sentence = ""
-        for i, part in enumerate(sentences):
-            if i % 2 == 0:  # Phần văn bản
-                current_sentence += part
-            else:  # Dấu câu
-                current_sentence += part
-                sentence_text = current_sentence.strip()
+        for line in lines:
+            line = line.strip()
+            if not line:
+                continue
+            
+            # Trích xuất các segment (quoted và non-quoted)
+            segments = extract_quoted_segments(line)
+            
+            if not segments:
+                continue
+            
+            for segment_text, is_quoted in segments:
+                if not segment_text.strip():
+                    continue
                 
-                # Thêm câu nếu có nội dung
-                if sentence_text:
-                    chunks.append((sentence_text, pause_duration, False))
+                if is_quoted:
+                    # Câu trong ngoặc kép -> giữ nguyên, dùng pause dialogue
+                    chunks.append((segment_text, pause_dialogue_duration, False))
+                    print(f"   💬 Quoted dialogue: '{segment_text[:60]}...'")
+                else:
+                    # Text bên ngoài ngoặc kép -> tách như bình thường
+                    sentences = re.split(r'([.!?]+)', segment_text)
+                    
                     current_sentence = ""
-        
-        # Thêm phần còn lại nếu có
-        if current_sentence.strip():
-            chunks.append((current_sentence.strip(), pause_duration, False))
+                    for i, part in enumerate(sentences):
+                        if i % 2 == 0:  # Phần văn bản
+                            current_sentence += part
+                        else:  # Dấu câu
+                            current_sentence += part
+                            sentence_text = current_sentence.strip()
+                            
+                            if sentence_text:
+                                chunks.append((sentence_text, pause_paragraph_duration, False))
+                                current_sentence = ""
+                    
+                    # Thêm phần còn lại nếu có
+                    if current_sentence.strip():
+                        chunks.append((current_sentence.strip(), pause_paragraph_duration, False))
     
-    # Gộp các câu < 2 từ hoặc câu lặp lại bằng dấu chấm
+    # Gộp các câu < 3 từ hoặc câu lặp lại bằng dấu chấm
     merged_chunks = []
-    temp_sentences = []  # Danh sách các câu tích lũy
+    temp_sentences = []
     temp_pause = pause_paragraph_duration
     
     for i, (sentence, pause, _) in enumerate(chunks):
@@ -144,9 +182,8 @@ def split_text_into_sentences(text, pause_paragraph_duration=0.8, pause_dialogue
                 # Gộp các câu tích lũy + câu hiện tại bằng dấu chấm
                 all_sentences = temp_sentences + [sentence]
                 merged_text = ". ".join(all_sentences)
-                # Đánh dấu là câu gộp
                 merged_chunks.append((merged_text, pause, True))
-                print(f"   🔗 Merged sentences (including repetitive): '{merged_text[:80]}...'")
+                print(f"   🔗 Merged sentences: '{merged_text[:80]}...'")
                 temp_sentences = []
             else:
                 # Câu độc lập
@@ -161,14 +198,12 @@ def split_text_into_sentences(text, pause_paragraph_duration=0.8, pause_dialogue
             # Nếu là câu cuối -> gộp với câu trước
             if is_last:
                 if merged_chunks:
-                    # Gộp vào câu trước bằng dấu chấm
                     last_sentence, last_pause, last_merged = merged_chunks[-1]
                     combined_text = last_sentence + ". " + ". ".join(temp_sentences)
                     merged_chunks[-1] = (combined_text, last_pause, True)
-                    print(f"   🔗 Merged last short/repetitive chunk(s) with period")
+                    print(f"   🔗 Merged last short/repetitive chunk(s)")
                     temp_sentences = []
                 else:
-                    # Không có câu trước -> thêm padding
                     merged_text = ". ".join(temp_sentences)
                     while len(merged_text.split()) < 3:
                         merged_text += " này"
@@ -179,13 +214,11 @@ def split_text_into_sentences(text, pause_paragraph_duration=0.8, pause_dialogue
     # Xử lý câu còn sót
     if temp_sentences:
         if merged_chunks:
-            # Gộp vào câu trước bằng dấu chấm
             last_sentence, last_pause, last_merged = merged_chunks[-1]
             combined_text = last_sentence + ". " + ". ".join(temp_sentences)
             merged_chunks[-1] = (combined_text, last_pause, True)
-            print(f"   🔗 Merged remaining short/repetitive chunks with period")
+            print(f"   🔗 Merged remaining short/repetitive chunks")
         else:
-            # Trường hợp đặc biệt: chỉ có câu ngắn
             merged_text = ". ".join(temp_sentences)
             while len(merged_text.split()) < 3:
                 merged_text += " này"
@@ -201,9 +234,6 @@ def create_silence(duration_seconds, sample_rate=24000):
 
 def post_process(text):
     """Làm sạch văn bản."""
-    # Loại bỏ ngoặc kép
-    text = text.replace('"', "").replace('"', "").replace('"', "")
-    
     # Loại bỏ dấu chấm lặp (... -> . hoặc .... -> .)
     text = re.sub(r'\.{2,}', '.', text)
     
@@ -222,7 +252,6 @@ def safe_normalize(text):
     """Normalize văn bản an toàn, xử lý lỗi với từ ngoại ngữ."""
     try:
         normalized = TTSnorm(text)
-        # Nếu kết quả quá ngắn hoặc rỗng, giữ nguyên text gốc
         if len(normalized.strip()) < 2:
             return text.lower()
         return normalized.lower()
@@ -232,13 +261,11 @@ def safe_normalize(text):
 
 def validate_text_for_tts(text):
     """Kiểm tra văn bản trước khi đưa vào TTS."""
-    # Loại bỏ khoảng trắng thừa
     text = ' '.join(text.split())
     
-    # Chỉ cảnh báo nếu quá ngắn
     words = text.split()
     if len(words) < 3:
-        print(f"   ⚠️ Warning: Very short text ({len(words)} words), this may cause issues")
+        print(f"   ⚠️ Warning: Very short text ({len(words)} words)")
     
     return text
 
@@ -274,7 +301,7 @@ def infer_tts(ref_audio_orig: str, gen_text: str, speed: float = 1.0,
             print(f"   {idx}. [{marker}, {pause}s] {sent[:80]}...")
         
         if not chunks:
-            raise gr.Error("No valid sentences found in text. Please check your input.")
+            raise gr.Error("No valid sentences found in text.")
         
         # Preprocess reference audio
         ref_audio, ref_text = preprocess_ref_audio_text(ref_audio_orig, "")
@@ -286,35 +313,25 @@ def infer_tts(ref_audio_orig: str, gen_text: str, speed: float = 1.0,
         for i, (sentence, pause_duration, is_merged) in enumerate(chunks):
             print(f"\n🔄 [{i+1}/{len(chunks)}] Processing: {sentence[:80]}...")
             
-            # Chuẩn hóa văn bản an toàn
+            # Chuẩn hóa văn bản
             normalized_text = safe_normalize(sentence)
-            
-            # Post-process PHẢI chạy SAU normalize để loại bỏ dấu chấm lặp
             normalized_text = post_process(normalized_text)
-            
-            # Validate văn bản
             normalized_text = validate_text_for_tts(normalized_text)
-            
-            # Loại bỏ dấu chấm cuối cùng nếu có (TTS không cần)
             normalized_text = normalized_text.rstrip('.')
             
-            # Kiểm tra độ dài tối thiểu
             word_count = len(normalized_text.strip().split())
             if word_count < 1:
-                print(f"   ⏭️ Skipped (empty after normalization): '{normalized_text}'")
+                print(f"   ⏭️ Skipped (empty)")
                 continue
             
-            # Nếu câu quá ngắn (1-2 từ), thêm padding
             if word_count < 3:
                 original_text = normalized_text
                 normalized_text = normalized_text + " này"
                 print(f"   ⚠️ Short sentence padded: '{original_text}' -> '{normalized_text}'")
             
             print(f"   📝 Normalized ({len(normalized_text.split())} words): {normalized_text[:80]}...")
-            if is_merged:
-                print(f"   ℹ️ Merged sentence - model will create natural pauses at periods")
             
-            # Retry logic với backoff
+            # Retry logic
             max_retries = 2
             retry_count = 0
             success = False
@@ -338,24 +355,22 @@ def infer_tts(ref_audio_orig: str, gen_text: str, speed: float = 1.0,
                     print(f"   ✅ Generated {len(wave)/sr:.2f}s audio")
                     success = True
                     
-                    # Thêm khoảng im lặng giữa các chunk chính (không phải câu cuối)
-                    # Nếu là câu gộp, không thêm silence vì model đã xử lý
+                    # Thêm im lặng giữa các chunk
                     if i < len(chunks) - 1 and not is_merged:
                         silence = create_silence(pause_duration, sample_rate)
                         audio_segments.append(silence)
-                        print(f"   ⏸️  Added {pause_duration}s silence between chunks")
+                        print(f"   ⏸️  Added {pause_duration}s silence")
                     elif i < len(chunks) - 1 and is_merged:
-                        print(f"   🔇 No manual silence (merged sentence with periods)")
+                        print(f"   🔇 No manual silence (merged sentence)")
                         
                 except Exception as e:
                     retry_count += 1
                     print(f"   ⚠️ Attempt {retry_count} failed: {str(e)[:100]}")
                     
                     if retry_count > max_retries:
-                        print(f"   ❌ Max retries reached, skipping chunk")
-                        # Thử với văn bản đơn giản hơn
+                        print(f"   ❌ Max retries reached, skipping")
                         if len(normalized_text.split()) > 3:
-                            print(f"   🔧 Trying with first 3 words only...")
+                            print(f"   🔧 Trying with first 3 words...")
                             simplified_text = ' '.join(normalized_text.split()[:3])
                             try:
                                 wave, sr, _ = infer_process(
@@ -371,16 +386,15 @@ def infer_tts(ref_audio_orig: str, gen_text: str, speed: float = 1.0,
                                 print(f"   ✅ Generated with simplified text")
                                 success = True
                             except:
-                                print(f"   ❌ Simplified attempt also failed, skipping")
+                                print(f"   ❌ Simplified attempt failed")
                         break
                     
-                    # Đợi một chút trước khi retry
                     import time
                     time.sleep(0.5)
         
-        # Ghép tất cả audio lại
+        # Ghép tất cả audio
         if not audio_segments:
-            raise gr.Error("No valid audio segments generated. Please check your text or try simpler sentences.")
+            raise gr.Error("No valid audio segments generated.")
             
         final_wave = np.concatenate(audio_segments)
         
@@ -451,12 +465,10 @@ with gr.Blocks(theme=gr.themes.Soft()) as demo:
         output_audio = gr.Audio(label="🎧 Generated Audio", type="numpy")
         output_spectrogram = gr.Image(label="📊 Spectrogram")
 
-    # Connect button to function
     btn_synthesize.click(
         infer_tts, 
         inputs=[ref_audio, gen_text, speed, pause_paragraph, pause_dialogue], 
         outputs=[output_audio, output_spectrogram]
     )
 
-# Launch with public link
 demo.queue().launch(share=True)
