@@ -414,14 +414,14 @@ with gr.Blocks(theme=gr.themes.Soft()) as demo:
         pause_paragraph = gr.Slider(
             minimum=0.0,
             maximum=1.0,
-            value=0.4,
+            value=0.2,
             step=0.05,
             label="⏸️ Pause (Paragraph)"
         )
         pause_dialogue = gr.Slider(
             minimum=0.0,
             maximum=1.0,
-            value=0.2,
+            value=0.1,
             step=0.05,
             label="⏸️ Pause (Dialogue)"
         )
