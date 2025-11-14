@@ -246,7 +246,7 @@ model = load_model(
 
 @spaces.GPU
 def infer_tts(ref_audio_orig: str, gen_text: str, speed: float = 1.0, 
-              pause_level: str = "Medium", request: gr.Request = None):
+              pause_paragraph: float = 0.4, pause_dialogue: float = 0.2, request: gr.Request = None):
     """
     TTS inference với pause thực sự bằng cách ghép audio.
     """
@@ -256,15 +256,6 @@ def infer_tts(ref_audio_orig: str, gen_text: str, speed: float = 1.0,
         raise gr.Error("Please enter the text content to generate voice.")
     
     try:
-        # Cấu hình pause (giây)
-        pause_configs = {
-            "Short": (0.2, 0.1),
-            "Medium": (0.4, 0.2),
-            "Long": (0.6, 0.3)
-        }
-        
-        pause_paragraph, pause_dialogue = pause_configs.get(pause_level, (0.4, 0.2))
-        
         print(f"\n🎛️ Pause config: Paragraph={pause_paragraph}s, Dialogue={pause_dialogue}s")
         
         # Tách văn bản thành các câu với thời gian dừng
@@ -402,28 +393,13 @@ def infer_tts(ref_audio_orig: str, gen_text: str, speed: float = 1.0,
 
 # Gradio UI
 with gr.Blocks(theme=gr.themes.Soft()) as demo:
-    gr.Markdown("""
-    # 🎤 F5-TTS: Vietnamese Text-to-Speech Synthesis
-    ### Model trained with ~1000 hours of data on RTX 3090 GPU
-    
-    Enter text and upload a sample voice to generate natural speech with **real silence pauses**.
-    
-    ✨ **Smart Pause Feature**: Automatically adds REAL silent pauses between sentences!
-    """)
+    gr.Markdown("# 🎤 F5-TTS: Vietnamese Text-to-Speech Synthesis")
     
     with gr.Row():
         ref_audio = gr.Audio(label="🔊 Sample Voice", type="filepath")
         gen_text = gr.Textbox(
             label="📝 Text to Generate", 
-            placeholder="""Enter text with paragraphs and dialogue...
-
-Example:
-Hắn lúc này đang ngồi trên boong tàu. Mắt nhìn ra biển xa.
-
-"Há há há!"
-"Toa lần này trở về nhà chơi được bao lâu?"
-
-Người hỏi là một người bạn tình cờ gặp.""", 
+            placeholder="Enter Vietnamese text here...", 
             lines=10
         )
     
@@ -435,11 +411,19 @@ Người hỏi là một người bạn tình cờ gặp.""",
             step=0.1, 
             label="⚡ Speed"
         )
-        pause_level = gr.Radio(
-            choices=["Short", "Medium", "Long"],
-            value="Medium",
-            label="⏸️ Pause Duration",
-            info="Controls REAL silence duration between sentences"
+        pause_paragraph = gr.Slider(
+            minimum=0.0,
+            maximum=1.0,
+            value=0.4,
+            step=0.05,
+            label="⏸️ Pause (Paragraph)"
+        )
+        pause_dialogue = gr.Slider(
+            minimum=0.0,
+            maximum=1.0,
+            value=0.2,
+            step=0.05,
+            label="⏸️ Pause (Dialogue)"
         )
     
     btn_synthesize = gr.Button("🔥 Generate Voice", variant="primary", size="lg")
@@ -447,65 +431,11 @@ Người hỏi là một người bạn tình cờ gặp.""",
     with gr.Row():
         output_audio = gr.Audio(label="🎧 Generated Audio", type="numpy")
         output_spectrogram = gr.Image(label="📊 Spectrogram")
-    
-    gr.Markdown("""
-    ### 💡 How Smart Pause Works (Enhanced):
-    
-    | Feature | Description |
-    |---------|-------------|
-    | **Paragraph Detection** | Separates narrative text by double line breaks |
-    | **Dialogue Detection** | Identifies quoted speech (even multi-line) |
-    | **Smart Period Merging** | Merges sentences < 2 words OR repetitive text |
-    | **Repetitive Detection** | Auto-detects "Há há há", "hu hu", etc. |
-    | **Model-Based Pauses** | AI naturally pauses at periods |
-    | **Three Levels** | Short (0.2s/0.1s), Medium (0.4s/0.2s), Long (0.6s/0.3s) |
-    
-    ### 📖 Usage Tips:
-    - **Separate paragraphs** with double line breaks (`\n\n`)
-    - **Dialogue** can span multiple lines - just use quotes `"..."`
-    - **Short sentences** (< 2 words) are merged with periods
-    - **Repetitive text** like "Há há há" is automatically merged
-    - **Natural prosody**: Model creates pauses at periods
-    - **Short**: Fast-paced reading
-    - **Medium**: Natural storytelling (recommended)
-    - **Long**: Dramatic audiobooks
-    
-    ### 🎯 Example Processing:
-    ```
-    Input:
-    "Nhà chồng em!"
-    "Há há há!"
-    "Còn quýt nữa?"
-    
-    → "Há há há!" is repetitive, so it gets merged:
-    "Nhà chồng em. Há há há!"
-    
-    → "Còn quýt nữa?" stays separate (≥ 3 words, not repetitive)
-    ```
-    
-    ### ⚠️ Note:
-    - Each sentence is processed separately, then combined with real silence
-    - Sentences < 2 words OR repetitive text are merged using periods
-    - Repetitive patterns: "ha ha", "hề hề", "ồ ồ ồ", etc.
-    - Longer texts take more time but produce better pause quality
-    """)
-    
-    with gr.Accordion("❗ Model Limitations", open=False):
-        gr.Markdown("""
-        1. **Numbers & Special Characters**: May not pronounce dates/phone numbers correctly
-        2. **Audio Quality**: Use clear reference audio without background noise
-        3. **Reference Text**: Auto-transcribed with Whisper (may have errors)
-        4. **Processing Time**: Increases with text length (sentence-by-sentence processing)
-        5. **Foreign Words**: Pronounced phonetically in Vietnamese
-        6. **Very Short Sentences**: Only sentences < 2 words or repetitive are merged
-        7. **Error Recovery**: If one sentence fails, processing continues with remaining text
-        8. **Repetitive Detection**: Works for most common patterns but may miss complex ones
-        """)
 
     # Connect button to function
     btn_synthesize.click(
         infer_tts, 
-        inputs=[ref_audio, gen_text, speed, pause_level], 
+        inputs=[ref_audio, gen_text, speed, pause_paragraph, pause_dialogue], 
         outputs=[output_audio, output_spectrogram]
     )
 
