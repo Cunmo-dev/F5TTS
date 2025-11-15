@@ -91,13 +91,30 @@ def smart_text_preprocessing(text, silence_duration=0.4):
     - Phát hiện và xử lý câu lặp lại (há há há)
     - Gộp câu ngắn < 3 từ bằng dấu chấm
     - Chuẩn hóa ký tự kết thúc câu
-    - Thêm <silence=X.X> để kiểm soát thời gian dừng
+    - Thêm dấu chấm lặp để tạo pause tự nhiên (dựa vào silence_duration)
     
     Returns:
         str: Văn bản đã được xử lý, sẵn sàng đọc một lần
     """
     print("\n📝 Starting smart text preprocessing...")
-    print(f"   Silence duration: {silence_duration}s")
+    print(f"   Silence duration: {silence_duration}s (will add extra periods)")
+    
+    # Tính số dấu chấm cần thêm dựa vào silence duration
+    # 0.1-0.3s: 1 dấu chấm
+    # 0.4-0.6s: 2 dấu chấm
+    # 0.7-1.0s: 3 dấu chấm
+    if silence_duration <= 0.3:
+        pause_marker = "."
+        para_pause_marker = ". "
+    elif silence_duration <= 0.6:
+        pause_marker = ". "
+        para_pause_marker = ". . "
+    else:
+        pause_marker = ". . "
+        para_pause_marker = ". . . "
+    
+    print(f"   Using pause marker: '{pause_marker}' between sentences")
+    print(f"   Using para marker: '{para_pause_marker}' between paragraphs")
     
     # Tách theo đoạn văn
     paragraphs = text.split('\n\n')
@@ -172,14 +189,13 @@ def smart_text_preprocessing(text, silence_duration=0.4):
                 processed_sentences.append(merged)
                 print(f"   ⚠️ Only short sentences (kept as is): '{merged}'")
         
-        # Ghép các câu trong đoạn với silence marker
-        processed_para = f" <silence={silence_duration}> ".join(processed_sentences)
+        # Ghép các câu trong đoạn với pause marker (dấu chấm)
+        processed_para = pause_marker.join(processed_sentences)
         processed_paragraphs.append(processed_para)
         print(f"   ✅ Paragraph result: '{processed_para[:80]}...'")
     
-    # Ghép tất cả đoạn văn lại với silence dài hơn giữa các đoạn
-    paragraph_silence = silence_duration * 1.5
-    final_text = f" <silence={paragraph_silence}> ".join(processed_paragraphs)
+    # Ghép tất cả đoạn văn lại với pause dài hơn
+    final_text = para_pause_marker.join(processed_paragraphs)
     
     print(f"\n✅ Preprocessing complete!")
     print(f"   Original length: {len(text)} chars")
@@ -359,11 +375,17 @@ Người hỏi là một người bạn tình cờ gặp.""",
     "Toa lần này trở về?"
     ```
     
-    **After:**
+    **After (with silence=0.4s):**
     ```
     "Há há há. Ồ. Toa lần này trở về?"
     ```
-    → Read as ONE continuous audio with natural pauses at periods
+    → Model reads as ONE audio with natural pauses at periods
+    
+    **How Silence Duration Works:**
+    - **0.1-0.3s**: Single period between sentences (`.`)
+    - **0.4-0.6s**: Double period (`. `) for longer pause
+    - **0.7-1.0s**: Triple period (`. . `) for dramatic pause
+    - **Between paragraphs**: Automatically uses longer pause
     
     ### ✅ Advantages:
     - ✔️ No chunking errors
@@ -371,12 +393,14 @@ Người hỏi là một người bạn tình cờ gặp.""",
     - ✔️ Handles repetitive text (há há, hề hề, etc.)
     - ✔️ Merges ultra-short sentences
     - ✔️ Single GPU pass = faster + more stable
+    - ✔️ Uses periods (not special markers) for pause control
     
     ### 📖 Usage Tips:
     - Separate paragraphs with double line breaks (`\\n\\n`)
     - Short sentences (< 3 words) will be merged automatically
     - Repetitive text like "Há há há" gets merged intelligently
     - Disable smart processing if you want raw text only
+    - Adjust silence slider to control pause length
     """)
     
     with gr.Accordion("❗ Model Limitations", open=False):
