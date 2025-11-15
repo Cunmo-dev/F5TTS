@@ -52,17 +52,52 @@ def is_repetitive_text(text):
     
     return False
 
-def smart_text_preprocessing(text):
+def normalize_sentence_ending(sentence):
+    """
+    Chuẩn hóa ký tự kết thúc câu:
+    - Nếu không có dấu chấm câu → thêm dấu chấm
+    - Nếu có dấu chấm + ký tự đặc biệt → xóa ký tự đặc biệt
+    """
+    sentence = sentence.strip()
+    
+    # Danh sách dấu câu hợp lệ
+    valid_punctuation = '.!?'
+    
+    # Kiểm tra ký tự cuối
+    if not sentence:
+        return sentence + "."
+    
+    last_char = sentence[-1]
+    
+    # Nếu đã có dấu câu hợp lệ
+    if last_char in valid_punctuation:
+        # Xóa các ký tự đặc biệt sau dấu chấm (nếu có)
+        while len(sentence) > 1 and sentence[-1] not in valid_punctuation:
+            sentence = sentence[:-1]
+        return sentence
+    
+    # Kiểm tra có dấu câu ở vị trí gần cuối không
+    for i in range(len(sentence) - 1, max(0, len(sentence) - 5), -1):
+        if sentence[i] in valid_punctuation:
+            # Có dấu câu nhưng có ký tự đặc biệt phía sau → cắt bỏ
+            return sentence[:i+1]
+    
+    # Không có dấu câu → thêm dấu chấm
+    return sentence + "."
+
+def smart_text_preprocessing(text, silence_duration=0.4):
     """
     Xử lý văn bản thông minh:
     - Phát hiện và xử lý câu lặp lại (há há há)
     - Gộp câu ngắn < 3 từ bằng dấu chấm
-    - Giữ nguyên cấu trúc đoạn văn và hội thoại
+    - Chuẩn hóa ký tự kết thúc câu
+    - Thêm <silence=X.X> để kiểm soát thời gian dừng
     
     Returns:
         str: Văn bản đã được xử lý, sẵn sàng đọc một lần
     """
     print("\n📝 Starting smart text preprocessing...")
+    print(f"   Silence duration: {silence_duration}s")
     
     # Tách theo đoạn văn
     paragraphs = text.split('\n\n')
@@ -110,38 +145,41 @@ def smart_text_preprocessing(text):
                 # Câu đủ dài
                 if temp_accumulator:
                     # Gộp các câu tích lũy + câu hiện tại
-                    merged = ". ".join(temp_accumulator + [sentence_text]) + punctuation
+                    merged = ". ".join(temp_accumulator + [sentence_text])
+                    merged = normalize_sentence_ending(merged)
                     processed_sentences.append(merged)
                     print(f"     → Merged with accumulated: '{merged[:60]}...'")
                     temp_accumulator = []
                 else:
                     # Câu độc lập
-                    processed_sentences.append(full_sentence)
-                    print(f"     → Kept as is")
+                    normalized = normalize_sentence_ending(sentence_text + punctuation)
+                    processed_sentences.append(normalized)
+                    print(f"     → Kept as is: '{normalized[:60]}...'")
         
         # Xử lý câu còn sót
         if temp_accumulator:
             if processed_sentences:
                 # Gộp vào câu trước
-                last_sentence = processed_sentences[-1]
-                merged = last_sentence.rstrip('.!?') + ". " + ". ".join(temp_accumulator) + "."
+                last_sentence = processed_sentences[-1].rstrip('.!?')
+                merged = last_sentence + ". " + ". ".join(temp_accumulator)
+                merged = normalize_sentence_ending(merged)
                 processed_sentences[-1] = merged
                 print(f"   🔗 Merged remaining to last sentence")
             else:
-                # Chỉ có câu ngắn -> padding
+                # Chỉ có câu ngắn → gộp bằng dấu chấm (không thêm "này")
                 merged = ". ".join(temp_accumulator)
-                while len(merged.split()) < 3:
-                    merged += " này"
-                processed_sentences.append(merged + ".")
-                print(f"   ⚠️ Only short sentences, added padding")
+                merged = normalize_sentence_ending(merged)
+                processed_sentences.append(merged)
+                print(f"   ⚠️ Only short sentences: '{merged}'")
         
-        # Ghép các câu trong đoạn
-        processed_para = " ".join(processed_sentences)
+        # Ghép các câu trong đoạn với silence marker
+        processed_para = f" <silence={silence_duration}> ".join(processed_sentences)
         processed_paragraphs.append(processed_para)
         print(f"   ✅ Paragraph result: '{processed_para[:80]}...'")
     
-    # Ghép tất cả đoạn văn lại
-    final_text = " ".join(processed_paragraphs)
+    # Ghép tất cả đoạn văn lại với silence dài hơn giữa các đoạn
+    paragraph_silence = silence_duration * 1.5
+    final_text = f" <silence={paragraph_silence}> ".join(processed_paragraphs)
     
     print(f"\n✅ Preprocessing complete!")
     print(f"   Original length: {len(text)} chars")
@@ -184,7 +222,8 @@ model = load_model(
 
 @spaces.GPU
 def infer_tts(ref_audio_orig: str, gen_text: str, speed: float = 1.0, 
-              use_smart_processing: bool = True, request: gr.Request = None):
+              silence_duration: float = 0.4, use_smart_processing: bool = True, 
+              request: gr.Request = None):
     """
     TTS inference với xử lý thông minh nhưng vẫn đọc toàn bộ một lần.
     """
@@ -198,7 +237,7 @@ def infer_tts(ref_audio_orig: str, gen_text: str, speed: float = 1.0,
     try:
         # Bước 1: Smart preprocessing (nếu được bật)
         if use_smart_processing:
-            processed_text = smart_text_preprocessing(gen_text)
+            processed_text = smart_text_preprocessing(gen_text, silence_duration)
         else:
             processed_text = gen_text
             print("\n📝 Smart processing disabled, using original text")
@@ -279,11 +318,20 @@ Người hỏi là một người bạn tình cờ gặp.""",
             step=0.1, 
             label="⚡ Speed"
         )
-        use_smart_processing = gr.Checkbox(
-            value=True,
-            label="🧠 Enable Smart Text Processing",
-            info="Merge repetitive/short sentences before TTS"
+        silence_duration = gr.Slider(
+            minimum=0.1,
+            maximum=1.0,
+            value=0.4,
+            step=0.1,
+            label="⏸️ Silence Duration (seconds)",
+            info="Control pause length between sentences"
         )
+    
+    use_smart_processing = gr.Checkbox(
+        value=True,
+        label="🧠 Enable Smart Text Processing",
+        info="Merge repetitive/short sentences before TTS"
+    )
     
     btn_synthesize = gr.Button("🔥 Generate Voice", variant="primary", size="lg")
     
@@ -344,7 +392,7 @@ Người hỏi là một người bạn tình cờ gặp.""",
     # Connect button
     btn_synthesize.click(
         infer_tts, 
-        inputs=[ref_audio, gen_text, speed, use_smart_processing], 
+        inputs=[ref_audio, gen_text, speed, silence_duration, use_smart_processing], 
         outputs=[output_audio, output_spectrogram]
     )
 
