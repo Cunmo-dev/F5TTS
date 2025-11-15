@@ -49,9 +49,6 @@ def post_process(text):
     # Tạm thời thay thế các đoạn text trong ngoặc kép bằng placeholder
     text = re.sub(r'"[^"]*"', save_quoted_text, text)
     
-    # THAY TẤT CẢ DẤU PHẨY BẰNG DẤU CHẤM (ngoài dấu ngoặc kép)
-    text = text.replace(',', '.')
-    
     # Xử lý text ngoài dấu ngoặc kép
     # Tách thành các phần dựa trên placeholder
     parts = re.split(r'(<<<QUOTED_\d+>>>)', text)
