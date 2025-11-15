@@ -166,11 +166,11 @@ def smart_text_preprocessing(text, silence_duration=0.4):
                 processed_sentences[-1] = merged
                 print(f"   🔗 Merged remaining to last sentence")
             else:
-                # Chỉ có câu ngắn → gộp bằng dấu chấm (không thêm "này")
+                # Chỉ có câu ngắn → giữ nguyên, KHÔNG thêm gì cả
                 merged = ". ".join(temp_accumulator)
                 merged = normalize_sentence_ending(merged)
                 processed_sentences.append(merged)
-                print(f"   ⚠️ Only short sentences: '{merged}'")
+                print(f"   ⚠️ Only short sentences (kept as is): '{merged}'")
         
         # Ghép các câu trong đoạn với silence marker
         processed_para = f" <silence={silence_duration}> ".join(processed_sentences)
