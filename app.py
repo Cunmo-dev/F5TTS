@@ -25,7 +25,7 @@ hf_token = os.getenv("HUGGINGFACEHUB_API_TOKEN")
 if hf_token:
     login(token=hf_token)
 
-def post_process(text):
+def post_process(text, silence_duration=0.3):
     """
     Xử lý văn bản với các quy tắc:
     1. Thay thế tất cả dấu phẩy bằng dấu chấm để mỗi câu ngắn đều độc lập
@@ -35,6 +35,7 @@ def post_process(text):
     5. Nếu ký tự đặc biệt ở cuối câu trong ngoặc kép, thay bằng dấu chấm
     6. Loại bỏ dấu phẩy/chấm trùng lặp trong ngoặc kép
     7. Xử lý câu ngoài dấu ngoặc kép: loại bỏ ký tự đặc biệt cuối câu và thêm dấu chấm
+    8. Thêm ký tự silence đặc biệt giữa các câu (dựa vào silence_duration)
     """
     
     # Đánh dấu các đoạn text trong dấu ngoặc kép để tránh xử lý nhầm
@@ -131,6 +132,17 @@ def post_process(text):
     # Loại bỏ khoảng trắng thừa
     text = " ".join(text.split())
     
+    # THÊM SILENCE: Tính số dấu chấm cần thêm dựa vào silence_duration
+    # Mỗi 0.1s ~ 1 dấu chấm thêm (có thể điều chỉnh tỷ lệ này)
+    if silence_duration > 0:
+        num_dots = int(silence_duration * 10)  # 0.3s = 3 dấu chấm
+        silence_marker = "." * num_dots
+        # Thay thế mỗi dấu chấm đơn bằng dấu chấm + silence marker
+        # Nhưng không thêm vào cuối câu
+        sentences = text.split('.')
+        sentences = [s.strip() for s in sentences if s.strip()]
+        text = silence_marker.join(sentences) + "."
+    
     return text
 
 # Load models
@@ -143,7 +155,7 @@ model = load_model(
 )
 
 @spaces.GPU
-def infer_tts(ref_audio_orig: str, gen_text: str, speed: float = 1.0, request: gr.Request = None):
+def infer_tts(ref_audio_orig: str, gen_text: str, speed: float = 1.0, silence_duration: float = 0.3, request: gr.Request = None):
 
     if not ref_audio_orig:
         raise gr.Error("Please upload a sample audio file.")
@@ -152,9 +164,15 @@ def infer_tts(ref_audio_orig: str, gen_text: str, speed: float = 1.0, request: g
     
     try:
         ref_audio, ref_text = preprocess_ref_audio_text(ref_audio_orig, "")
+        
+        # Xử lý text với silence duration
+        processed_text = post_process(TTSnorm(gen_text), silence_duration).lower()
+        
+        # Chạy inference 1 lần duy nhất như code cũ
         final_wave, final_sample_rate, spectrogram = infer_process(
-            ref_audio, ref_text.lower(), post_process(TTSnorm(gen_text)).lower(), model, vocoder, speed=speed
+            ref_audio, ref_text.lower(), processed_text, model, vocoder, speed=speed
         )
+        
         with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp_spectrogram:
             spectrogram_path = tmp_spectrogram.name
             save_spectrogram(spectrogram, spectrogram_path)
@@ -175,7 +193,10 @@ with gr.Blocks(theme=gr.themes.Soft()) as demo:
         ref_audio = gr.Audio(label="🔊 Sample Voice", type="filepath")
         gen_text = gr.Textbox(label="📝 Text", placeholder="Enter the text to generate voice...", lines=3)
     
-    speed = gr.Slider(0.3, 2.0, value=1.0, step=0.1, label="⚡ Speed")
+    with gr.Row():
+        speed = gr.Slider(0.3, 2.0, value=1.0, step=0.1, label="⚡ Speed")
+        silence_duration = gr.Slider(0.0, 2.0, value=0.3, step=0.1, label="🔇 Silence Between Sentences (seconds)")
+    
     btn_synthesize = gr.Button("🔥 Generate Voice")
     
     with gr.Row():
@@ -186,13 +207,18 @@ with gr.Blocks(theme=gr.themes.Soft()) as demo:
         value="""1. This model may not perform well with numerical characters, dates, special characters, etc. => A text normalization module is needed.
 2. The rhythm of some generated audios may be inconsistent or choppy => It is recommended to select clearly pronounced sample audios with minimal pauses for better synthesis quality.
 3. Default, reference audio text uses the pho-whisper-medium model, which may not always accurately recognize Vietnamese, resulting in poor voice synthesis quality.
-4. Inference with overly long paragraphs may produce poor results.""", 
+4. Inference with overly long paragraphs may produce poor results.
+5. The silence slider adds extra periods (.) between sentences to create pauses. The model interprets multiple periods as longer pauses.""", 
         label="❗ Model Limitations",
-        lines=4,
+        lines=5,
         interactive=False
     )
 
-    btn_synthesize.click(infer_tts, inputs=[ref_audio, gen_text, speed], outputs=[output_audio, output_spectrogram])
+    btn_synthesize.click(
+        infer_tts, 
+        inputs=[ref_audio, gen_text, speed, silence_duration], 
+        outputs=[output_audio, output_spectrogram]
+    )
 
 # Run Gradio with share=True to get a gradio.live link
 demo.queue().launch(share=True)
