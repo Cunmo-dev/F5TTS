@@ -8,6 +8,7 @@ from cached_path import cached_path
 import tempfile
 from vinorm import TTSnorm
 import re
+import numpy as np
 
 from f5_tts.model import DiT
 from f5_tts.infer.utils_infer import (
@@ -133,6 +134,25 @@ def post_process(text):
     
     return text
 
+def split_sentences(text):
+    """
+    Chia văn bản thành các câu dựa trên dấu chấm
+    """
+    # Chia theo dấu chấm, loại bỏ câu rỗng
+    sentences = [s.strip() for s in text.split('.') if s.strip()]
+    return sentences
+
+def add_silence(audio_array, sample_rate, silence_duration):
+    """
+    Thêm khoảng lặng vào cuối audio
+    audio_array: numpy array của audio
+    sample_rate: tần số lấy mẫu
+    silence_duration: thời gian lặng (giây)
+    """
+    silence_samples = int(sample_rate * silence_duration)
+    silence = np.zeros(silence_samples, dtype=audio_array.dtype)
+    return np.concatenate([audio_array, silence])
+
 # Load models
 vocoder = load_vocoder()
 model = load_model(
@@ -143,7 +163,7 @@ model = load_model(
 )
 
 @spaces.GPU
-def infer_tts(ref_audio_orig: str, gen_text: str, speed: float = 1.0, request: gr.Request = None):
+def infer_tts(ref_audio_orig: str, gen_text: str, speed: float = 1.0, silence_duration: float = 0.0, request: gr.Request = None):
 
     if not ref_audio_orig:
         raise gr.Error("Please upload a sample audio file.")
@@ -151,15 +171,52 @@ def infer_tts(ref_audio_orig: str, gen_text: str, speed: float = 1.0, request: g
         raise gr.Error("Please enter the text content to generate voice.")
     
     try:
+        # Xử lý văn bản
+        processed_text = post_process(TTSnorm(gen_text)).lower()
+        
+        # Chia thành các câu
+        sentences = split_sentences(processed_text)
+        
+        if not sentences:
+            raise gr.Error("No valid sentences found after text processing.")
+        
+        # Tiền xử lý audio tham chiếu
         ref_audio, ref_text = preprocess_ref_audio_text(ref_audio_orig, "")
-        final_wave, final_sample_rate, spectrogram = infer_process(
-            ref_audio, ref_text.lower(), post_process(TTSnorm(gen_text)).lower(), model, vocoder, speed=speed
-        )
+        
+        # Tổng hợp từng câu và nối lại
+        all_waves = []
+        all_spectrograms = []
+        
+        for i, sentence in enumerate(sentences):
+            if not sentence.strip():
+                continue
+                
+            # Sinh audio cho câu hiện tại
+            wave, sample_rate, spectrogram = infer_process(
+                ref_audio, 
+                ref_text.lower(), 
+                sentence, 
+                model, 
+                vocoder, 
+                speed=speed
+            )
+            
+            # Thêm khoảng lặng nếu không phải câu cuối
+            if i < len(sentences) - 1 and silence_duration > 0:
+                wave = add_silence(wave, sample_rate, silence_duration)
+            
+            all_waves.append(wave)
+            all_spectrograms.append(spectrogram)
+        
+        # Nối tất cả các audio lại
+        final_wave = np.concatenate(all_waves)
+        
+        # Lưu spectrogram của câu đầu tiên (hoặc có thể tổng hợp)
         with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp_spectrogram:
             spectrogram_path = tmp_spectrogram.name
-            save_spectrogram(spectrogram, spectrogram_path)
+            save_spectrogram(all_spectrograms[0], spectrogram_path)
 
-        return (final_sample_rate, final_wave), spectrogram_path
+        return (sample_rate, final_wave), spectrogram_path
     except Exception as e:
         raise gr.Error(f"Error generating voice: {e}")
 
@@ -175,7 +232,10 @@ with gr.Blocks(theme=gr.themes.Soft()) as demo:
         ref_audio = gr.Audio(label="🔊 Sample Voice", type="filepath")
         gen_text = gr.Textbox(label="📝 Text", placeholder="Enter the text to generate voice...", lines=3)
     
-    speed = gr.Slider(0.3, 2.0, value=1.0, step=0.1, label="⚡ Speed")
+    with gr.Row():
+        speed = gr.Slider(0.3, 2.0, value=1.0, step=0.1, label="⚡ Speed")
+        silence_duration = gr.Slider(0.0, 2.0, value=0.3, step=0.1, label="🔇 Silence Between Sentences (seconds)")
+    
     btn_synthesize = gr.Button("🔥 Generate Voice")
     
     with gr.Row():
@@ -186,13 +246,18 @@ with gr.Blocks(theme=gr.themes.Soft()) as demo:
         value="""1. This model may not perform well with numerical characters, dates, special characters, etc. => A text normalization module is needed.
 2. The rhythm of some generated audios may be inconsistent or choppy => It is recommended to select clearly pronounced sample audios with minimal pauses for better synthesis quality.
 3. Default, reference audio text uses the pho-whisper-medium model, which may not always accurately recognize Vietnamese, resulting in poor voice synthesis quality.
-4. Inference with overly long paragraphs may produce poor results.""", 
+4. Inference with overly long paragraphs may produce poor results.
+5. The silence slider adds pauses between sentences split by periods (.) for better audio clarity.""", 
         label="❗ Model Limitations",
-        lines=4,
+        lines=5,
         interactive=False
     )
 
-    btn_synthesize.click(infer_tts, inputs=[ref_audio, gen_text, speed], outputs=[output_audio, output_spectrogram])
+    btn_synthesize.click(
+        infer_tts, 
+        inputs=[ref_audio, gen_text, speed, silence_duration], 
+        outputs=[output_audio, output_spectrogram]
+    )
 
 # Run Gradio with share=True to get a gradio.live link
 demo.queue().launch(share=True)
