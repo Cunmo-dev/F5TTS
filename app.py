@@ -19,7 +19,7 @@ from f5_tts.infer.utils_infer import (
 )
 
 # Retrieve token from secrets
-hf_token = os.getenv("HUGGINGFACEHUB_API_TOKEN")
+hf_token = os.getenv("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")
 
 # Log in to Hugging Face
 if hf_token:
