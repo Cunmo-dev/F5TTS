@@ -20,7 +20,7 @@ from f5_tts.infer.utils_infer import (
 
 # ===== SỬA LỖI 1: Token =====
 # Cách 1: Dùng token trực tiếp
-hf_token = "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"
+hf_token = "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"
 
 # Cách 2: Dùng biến môi trường (khuyến khích cho production)
 # hf_token = os.getenv("HF_TOKEN")
@@ -163,7 +163,7 @@ model = load_model(
     DiT,
     dict(dim=1024, depth=22, heads=16, ff_mult=2, text_dim=512, conv_layers=4),
     # Bỏ "datasets/" trong path
-    ckpt_path=str(cached_path("hf://hynt/ZipVoice-Vietnamese-2500h-Features/epoch-11.pt")),
+    ckpt_path=str(cached_path("hf://thanhcong190693/F5TTSVN/model_last.pt")),
     vocab_file=str(cached_path("hf://thanhcong190693/F5TTSVN/config.json")),
 )
 print("Model loaded successfully!")
