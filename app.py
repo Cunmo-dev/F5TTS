@@ -18,18 +18,12 @@ from f5_tts.infer.utils_infer import (
     save_spectrogram,
 )
 
-# ===== SỬA LỖI 1: Token =====
-# Cách 1: Dùng token trực tiếp
-hf_token = "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"
-
-# Cách 2: Dùng biến môi trường (khuyến khích cho production)
-# hf_token = os.getenv("HF_TOKEN")
+# Retrieve token from secrets
+hf_token = os.getenv("HUGGINGFACEHUB_API_TOKEN")
 
 # Log in to Hugging Face
 if hf_token:
     login(token=hf_token)
-else:
-    print("Warning: No HuggingFace token found!")
 
 def post_process(text, silence_duration=0.3):
     """
@@ -154,19 +148,14 @@ def post_process(text, silence_duration=0.3):
     return text
 
 # Load models
-print("Loading vocoder...")
 vocoder = load_vocoder()
-
-print("Loading F5-TTS model...")
-# ===== SỬA LỖI 2: Dataset path =====
 model = load_model(
     DiT,
     dict(dim=1024, depth=22, heads=16, ff_mult=2, text_dim=512, conv_layers=4),
-    # Bỏ "datasets/" trong path
     ckpt_path=str(cached_path("hf://thanhcong190693/F5TTSVN/model_last.pt")),
     vocab_file=str(cached_path("hf://thanhcong190693/F5TTSVN/config.json")),
 )
-print("Model loaded successfully!")
+# ckpt_path=str(cached_path("hf://thanhcong190693/F5TTSVN/model_last.pt"))
 
 @spaces.GPU
 def infer_tts(ref_audio_orig: str, gen_text: str, speed: float = 1.0, silence_duration: float = 0.3, request: gr.Request = None):
