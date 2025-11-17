@@ -152,9 +152,10 @@ vocoder = load_vocoder()
 model = load_model(
     DiT,
     dict(dim=1024, depth=22, heads=16, ff_mult=2, text_dim=512, conv_layers=4),
-    ckpt_path=str(cached_path("hf://thanhcong190693/F5TTSVN/model_last.pt")),
+    ckpt_path = str(cached_path("hf://datasets/hynt/ZipVoice-Vietnamese-2500h-Features/epoch-11.pt")),
     vocab_file=str(cached_path("hf://thanhcong190693/F5TTSVN/config.json")),
 )
+# ckpt_path=str(cached_path("hf://thanhcong190693/F5TTSVN/model_last.pt"))
 
 @spaces.GPU
 def infer_tts(ref_audio_orig: str, gen_text: str, speed: float = 1.0, silence_duration: float = 0.3, request: gr.Request = None):
