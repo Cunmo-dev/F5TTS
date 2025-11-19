@@ -164,7 +164,11 @@ def infer_tts(ref_audio_orig: str, gen_text: str, speed: float = 1.0, silence_du
         raise gr.Error("Please upload a sample audio file.")
     if not gen_text.strip():
         raise gr.Error("Please enter the text content to generate voice.")
-    
+     # ====== THÊM KIỂM TRA GIỚI HẠN 1000 TỪ ======
+    word_count = len(gen_text.split())
+    if word_count > 1000:
+        raise gr.Error(f"Text too long! You entered {word_count} words. Please enter text content with less than 1000 words.")
+    # ============================================
     try:
         ref_audio, ref_text = preprocess_ref_audio_text(ref_audio_orig, "")
         
